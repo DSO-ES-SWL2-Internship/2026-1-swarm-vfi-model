@@ -1,0 +1,6 @@
+*.*
+!**/*.py
+!requirements.txt
+!*.sh
+!.gitignore
+!*.md
