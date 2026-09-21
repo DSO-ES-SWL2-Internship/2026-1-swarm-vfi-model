@@ -6,7 +6,7 @@ gi.require_version("Gst", "1.0")
 from gi.repository import Gst
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-VIDEOS_DIR = SCRIPT_DIR.parent / "videos"
+VIDEOS_DIR = SCRIPT_DIR.parent.parent / "videos"  # streaming/videos -- two levels up
 
 VIDEO_PATH = str(VIDEOS_DIR / "sintel_trailer-480p.mp4")
 
