@@ -1,11 +1,16 @@
 import argparse
+from pathlib import Path
 
 import gi
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst
 
-Gst.init(None)
+SCRIPT_DIR = Path(__file__).resolve().parent
+VIDEOS_DIR = SCRIPT_DIR.parent / "videos"
 
+VIDEO_PATH = str(VIDEOS_DIR / "sintel_trailer-480p.mp4")
+
+Gst.init(None)
 
 # demuxer -> parser dynamic pad callback (same reason as sender.py's qtdemux:
 # qtdemux's output pads only exist once it has actually parsed the container)
@@ -68,7 +73,7 @@ if not link_many(parser, muxer, tcpserversink):
 	print("Elements from parser to tcpserversink could not be linked")
 	exit(-1)
 
-source.set_property("location", "videos/sintel_trailer-480p.mp4")
+source.set_property("location", VIDEO_PATH)
 tcpserversink.set_property("host", args.host)
 tcpserversink.set_property("port", args.port)
 tcpserversink.set_property("sync", True)  # pace to the buffers' own timestamps, same reasoning as sender.py

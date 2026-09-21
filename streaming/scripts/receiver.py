@@ -1,17 +1,26 @@
 import argparse
 import csv
 import time
+from pathlib import Path
 
+# GStreamer
 import gi
 gi.require_version("Gst", "1.0")
 gi.require_version("GstApp", "1.0")
 from gi.repository import Gst, GstApp
+
+# Math/ML
 import numpy as np
 import onnxruntime as ort
-import tensorflow as tf
+# import tensorflow as tf
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+VIDEOS_DIR = SCRIPT_DIR.parent / "videos"          # streaming/videos -- one level up
+MODELS_DIR = SCRIPT_DIR.parent.parent / "artifacts"  # machine-learning/artifacts -- two levels up
+
+MODEL_PATH = str(MODELS_DIR / "toy_unet_int8.onnx")
 
 Gst.init(None)
-
 
 # tsdemux's video src pad only exists once it has parsed the stream header --
 # same reason sender.py/sender_tcp.py need this for their demuxers.
@@ -86,83 +95,81 @@ class FrameHold:
 	def on_eos(self, sink):
 		self.appsrc.end_of_stream()
 
+# TFLite implementation of toy unet model
+# class ToyUnetBlender:
 
-class ToyUnetBlender:
-	MODEL_PATH = "/home/dsointern/projects/intern1-swarm/machine-learning/artifacts/toy_unet_int8.tflite"
+# 	def __init__(self, appsrc):
+# 		self.appsrc = appsrc
+# 		self.prev_buffer = None
 
-	def __init__(self, appsrc):
-		self.appsrc = appsrc
-		self.prev_buffer = None
+# 		self.interpreter = tf.lite.Interpreter(model_path=self.MODEL_PATH)
+# 		self.interpreter.allocate_tensors()
+# 		self.input_detail = self.interpreter.get_input_details()[0]
+# 		self.output_detail = self.interpreter.get_output_details()[0]
 
-		self.interpreter = tf.lite.Interpreter(model_path=self.MODEL_PATH)
-		self.interpreter.allocate_tensors()
-		self.input_detail = self.interpreter.get_input_details()[0]
-		self.output_detail = self.interpreter.get_output_details()[0]
+# 	def infer(self, buf1, buf2):
+# 		success1, map1 = buf1.map(Gst.MapFlags.READ)
+# 		success2, map2 = buf2.map(Gst.MapFlags.READ)
 
-	def infer(self, buf1, buf2):
-		success1, map1 = buf1.map(Gst.MapFlags.READ)
-		success2, map2 = buf2.map(Gst.MapFlags.READ)
+# 		frame1 = np.frombuffer(map1.data, dtype=np.uint8).reshape(256, 448)
+# 		frame2 = np.frombuffer(map2.data, dtype=np.uint8).reshape(256, 448)
 
-		frame1 = np.frombuffer(map1.data, dtype=np.uint8).reshape(256, 448)
-		frame2 = np.frombuffer(map2.data, dtype=np.uint8).reshape(256, 448)
+# 		buf1.unmap(map1)
+# 		buf2.unmap(map2)
 
-		buf1.unmap(map1)
-		buf2.unmap(map2)
+# 		in_zero_point = self.input_detail["quantization"][1]
+# 		f1_q = (frame1.astype(np.int16) + in_zero_point).astype(np.int8)
+# 		f2_q = (frame2.astype(np.int16) + in_zero_point).astype(np.int8)
+# 		input_tensor = np.stack([f1_q, f2_q], axis=-1)[None, ...]
 
-		in_zero_point = self.input_detail["quantization"][1]
-		f1_q = (frame1.astype(np.int16) + in_zero_point).astype(np.int8)
-		f2_q = (frame2.astype(np.int16) + in_zero_point).astype(np.int8)
-		input_tensor = np.stack([f1_q, f2_q], axis=-1)[None, ...]
+# 		self.interpreter.set_tensor(self.input_detail["index"], input_tensor)
+# 		self.interpreter.invoke()
+# 		output_q = self.interpreter.get_tensor(self.output_detail["index"])[0, ..., 0]
 
-		self.interpreter.set_tensor(self.input_detail["index"], input_tensor)
-		self.interpreter.invoke()
-		output_q = self.interpreter.get_tensor(self.output_detail["index"])[0, ..., 0]
+# 		out_zero_point = self.output_detail["quantization"][1]
+# 		output_pixels = (output_q.astype(np.int16) - out_zero_point).astype(np.uint8)
 
-		out_zero_point = self.output_detail["quantization"][1]
-		output_pixels = (output_q.astype(np.int16) - out_zero_point).astype(np.uint8)
+# 		return output_pixels
 
-		return output_pixels
+# 	def blend(self, buf1, buf2):
+# 		predicted_pixels = self.infer(buf1, buf2)
+# 		predicted_buf = Gst.Buffer.new_wrapped(predicted_pixels.tobytes())
+# 		predicted_buf.pts = (buf1.pts + buf2.pts) // 2
+# 		return predicted_buf
 
-	def blend(self, buf1, buf2):
-		predicted_pixels = self.infer(buf1, buf2)
-		predicted_buf = Gst.Buffer.new_wrapped(predicted_pixels.tobytes())
-		predicted_buf.pts = (buf1.pts + buf2.pts) // 2
-		return predicted_buf
+# 	def on_new_preroll(self, sink):
+# 		sample = sink.pull_preroll()
+# 		if not sample:
+# 			return Gst.FlowReturn.ERROR
+# 		buffer = sample.get_buffer()
+# 		self.appsrc.push_buffer(buffer)
+# 		self.prev_buffer = buffer
+# 		return Gst.FlowReturn.OK
 
-	def on_new_preroll(self, sink):
-		sample = sink.pull_preroll()
-		if not sample:
-			return Gst.FlowReturn.ERROR
-		buffer = sample.get_buffer()
-		self.appsrc.push_buffer(buffer)
-		self.prev_buffer = buffer
-		return Gst.FlowReturn.OK
+# 	def on_new_sample(self, sink):
+# 		sample = sink.pull_sample()
+# 		if not sample:
+# 			return Gst.FlowReturn.ERROR
+# 		buffer = sample.get_buffer()
 
-	def on_new_sample(self, sink):
-		sample = sink.pull_sample()
-		if not sample:
-			return Gst.FlowReturn.ERROR
-		buffer = sample.get_buffer()
+# 		predicted = self.blend(self.prev_buffer, buffer)
+# 		self.appsrc.push_buffer(predicted)
+# 		self.appsrc.push_buffer(buffer)
 
-		predicted = self.blend(self.prev_buffer, buffer)
-		self.appsrc.push_buffer(predicted)
-		self.appsrc.push_buffer(buffer)
+# 		self.prev_buffer = buffer
+# 		return Gst.FlowReturn.OK
 
-		self.prev_buffer = buffer
-		return Gst.FlowReturn.OK
+# 	def on_eos(self, sink):
+# 		self.appsrc.end_of_stream()
 
-	def on_eos(self, sink):
-		self.appsrc.end_of_stream()
-
-
+# ONNX runtime implementation of toy unet model
 class ToyUnetBlenderONNX:
-	MODEL_PATH = "/home/dsointern/projects/intern1-swarm/machine-learning/artifacts/toy_unet_int8.onnx"
 
 	def __init__(self, appsrc):
 		self.appsrc = appsrc
 		self.prev_buffer = None
 
-		self.session = ort.InferenceSession(self.MODEL_PATH)
+		self.session = ort.InferenceSession(MODEL_PATH) # Begins ONNX runtime inference session
 		self.input_name = self.session.get_inputs()[0].name
 		self.output_name = self.session.get_outputs()[0].name
 
@@ -308,7 +315,7 @@ TECHNIQUES = {
 	"passthrough": Passthrough,
 	"frame_hold": FrameHold,
 	"linear_blend": LinearBlender,
-	"toy_unet": ToyUnetBlender,
+# 	"toy_unet": ToyUnetBlender,
 	"toy_unet_onnx": ToyUnetBlenderONNX,
 }
 
@@ -403,6 +410,7 @@ caps = Gst.Caps.from_string("video/x-raw, width=448, height=256, format=GRAY8")
 capsfilter.set_property("caps", caps)
 appsrc.set_property("caps", caps)
 
+## PROFILING
 # Track when the last frame arrived, so the main loop can detect "no frames
 # for N seconds" and infer the sender is done -- an inactivity heuristic
 # instead of a fixed window, adapting to however long the stream actually is.
@@ -410,17 +418,18 @@ last_frame_time = time.time()
 frame_count = 0
 
 # Stuttering-investigation instrumentation: two separate timestamp logs.
-# "arrival" = when a decoded frame reaches appsink (arm A) -- reflects
-# network/decode timing, upstream of any VFI processing. "render" = when a
-# buffer actually reaches videosink's sink pad (arm B) -- reflects what the
-# viewer actually sees, downstream of VFI and the queue. Kept separate on
-# purpose: the network-isolation experiment cares about "arrival" intervals,
+# Kept separate on purpose: the network-isolation experiment cares about "arrival" intervals,
 # the VFI-isolation experiment cares about "render" intervals, and comparing
 # the two against each other is itself informative (e.g. VFI adding jitter
 # that wasn't present in the arrival stream).
-arrival_log = []
-render_log = []
 
+# "arrival" = when a decoded frame reaches appsink (arm A) -- reflects
+# network/decode timing, upstream of any VFI processing. 
+arrival_log = []
+
+# "render" = when a buffer actually reaches videosink's sink pad (arm B) -- reflects what the
+# viewer actually sees, downstream of VFI and the queue.
+render_log = []
 
 def track_activity(handler):
 	def wrapped(sink):
@@ -445,7 +454,7 @@ def on_videosink_buffer(pad, info):
 
 
 def write_frame_log():
-	path = f"videos/frame_log_{args.technique}.csv"
+	path = str(VIDEOS_DIR / f"frame_log_{args.technique}.csv")
 	with open(path, "w", newline="") as f:
 		writer = csv.writer(f)
 		writer.writerow(["stage", "frame_index", "timestamp"])
