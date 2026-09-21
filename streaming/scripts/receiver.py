@@ -1,5 +1,4 @@
 import argparse
-import csv
 import time
 from pathlib import Path
 
@@ -327,7 +326,11 @@ parser_args.add_argument("--idle-timeout", type=int, default=10,
                           help="seconds with no frames arriving before assuming the sender is done -- "
                                "TCP does deliver a real EOS when the sender closes the connection, but this "
                                "heuristic is kept as a fallback/consistency with the UDP receiver.")
+parser_args.add_argument("--output", type=str, default=None,
+                          help="path to save the received/interpolated video "
+                               "(default: streaming/videos/received_<technique>.mp4)")
 args = parser_args.parse_args()
+output_path = args.output or str(VIDEOS_DIR / f"received_{args.technique}.mp4")
 
 # Arm A: receive -> demux (TS) -> decode -> downscale -> VFI technique -> appsink
 tcpclientsrc = make_element("tcpclientsrc", "tcpclientsrc")
@@ -339,46 +342,40 @@ scale = make_element("videoscale", "scale")
 capsfilter = make_element("capsfilter", "capsfilter")
 appsink = make_element("appsink", "appsink")
 
-# Arm B: appsrc -> queue -> convert -> videosink (live playback window instead
-# of writing a file -- no encode/mux needed, autovideosink can display raw
-# frames directly, and sync=True paces display to each buffer's pts against
-# the pipeline clock so it plays back at the right rate instead of flashing
-# frames as fast as the VFI technique can produce them).
+# Arm B: appsrc -> queue -> convert -> encoder -> muxer -> filesink. Writes a real, seekable
+# video file rather than driving a live display -- lets specific ranges be replayed later for
+# comparison, and is what the first-frame/last-frame throughput measurement below needs.
+# sync=False on the filesink (set further down) means frames get written as fast as the
+# pipeline can produce them, not paced to the source video's real-time playback speed.
 #
-# The queue is not optional here, unlike with the old filesink output: appsrc.
-# push_buffer() runs downstream synchronously, in whatever thread calls it --
-# and that's the appsink "new-sample"/"new-preroll" callback, which fires on
-# arm A's own GStreamer streaming thread, not the main Python thread. Without
-# a queue, videosink's render() would get invoked from that foreign thread.
-# filesink never cared which thread called it, but a windowing/GL sink like
-# autovideosink does (GL contexts are thread-affine) -- calling into it from
-# the wrong thread is exactly what caused the segfault. queue has its own
-# internal thread, so it decouples the thread pushing buffers in (arm A) from
-# the thread actually pulling and rendering them (a thread videosink owns).
+# The queue is still needed even though nothing downstream renders to a window anymore:
+# appsrc.push_buffer() runs downstream synchronously, in whatever thread calls it -- and
+# that's arm A's own appsink "new-sample"/"new-preroll" callback, which fires on arm A's
+# GStreamer streaming thread, not the main Python thread. queue has its own internal thread,
+# so it decouples the thread pushing buffers in (arm A) from the thread actually encoding/
+# writing them downstream -- this used to matter even more acutely with a GL-based videosink
+# (calling into a GL context from the wrong thread segfaulted reliably), but it's good
+# practice regardless of what's downstream.
 appsrc = make_element("appsrc", "appsrc")
 queue = make_element("queue", "queue")
 convert2 = make_element("videoconvert", "convert2")
-# ximagesink, not autovideosink -- autovideosink autoplugs to a GL-based sink
-# (glimagesink) here, and that segfaults when sharing a process with an
-# imported tensorflow (confirmed via isolated repro: identical two-pipeline
-# appsink/appsrc bridge crashes with tensorflow+autovideosink, survives with
-# tensorflow+ximagesink). tensorflow gets imported unconditionally at the top
-# of this file even for techniques that don't use it, so any GL sink is
-# unsafe here regardless of which --technique is selected.
-videosink = make_element("ximagesink", "videosink")
+# GRAY8 -> I420 happens in convert2 above (x264enc doesn't take raw GRAY8 directly).
+encoder = make_element("x264enc", "encoder")
+muxer = make_element("mp4mux", "muxer")
+filesink = make_element("filesink", "filesink")
 
 pipeline = Gst.Pipeline.new("receiver-pipeline")
 pipeline2 = Gst.Pipeline.new("receiver-pipeline-2")
 
 elements = [tcpclientsrc, demuxer, parser, decoder, convert, scale, capsfilter, appsink,
-            appsrc, queue, convert2, videosink]
+            appsrc, queue, convert2, encoder, muxer, filesink]
 if not pipeline or not pipeline2 or not all(elements):
 	print("Failed to create pipeline or one of its elements")
 	exit(-1)
 
 for el in [tcpclientsrc, demuxer, parser, decoder, convert, scale, capsfilter, appsink]:
 	pipeline.add(el)
-for el in [appsrc, queue, convert2, videosink]:
+for el in [appsrc, queue, convert2, encoder, muxer, filesink]:
 	pipeline2.add(el)
 
 # demuxer's src pad is dynamic (only appears once tsdemux has parsed the TS
@@ -393,8 +390,8 @@ if not link_many(parser, decoder, convert, scale, capsfilter, appsink):
 	print("Elements from parser to appsink could not be linked")
 	exit(-1)
 
-if not link_many(appsrc, queue, convert2, videosink):
-	print("Elements from appsrc to videosink could not be linked")
+if not link_many(appsrc, queue, convert2, encoder, muxer, filesink):
+	print("Elements from appsrc to filesink could not be linked")
 	exit(-1)
 
 demuxer.connect("pad-added", on_pad_added, parser)
@@ -404,65 +401,58 @@ tcpclientsrc.set_property("port", args.port)
 appsink.set_property("emit-signals", True)
 appsink.set_property("sync", False)
 appsrc.set_property("format", Gst.Format.TIME)
-videosink.set_property("sync", True)  # pace playback to each buffer's pts, not just display-as-fast-as-possible
+# sync=False, unlike the old ximagesink (which had sync=True to pace playback for a live
+# viewer) -- there's no viewer now, and pacing to real-time pts would make the first-frame/
+# last-frame throughput measurement below meaningless (it'd just reflect the source video's
+# own runtime, not how fast this pipeline -- including VFI compute -- actually processes it).
+filesink.set_property("sync", False)
+filesink.set_property("location", output_path)
 
 caps = Gst.Caps.from_string("video/x-raw, width=448, height=256, format=GRAY8")
 capsfilter.set_property("caps", caps)
 appsrc.set_property("caps", caps)
 
-## PROFILING
-# Track when the last frame arrived, so the main loop can detect "no frames
-# for N seconds" and infer the sender is done -- an inactivity heuristic
-# instead of a fixed window, adapting to however long the stream actually is.
+## PERFORMANCE TIMING
+# Track when the last frame arrived, so the main loop can detect "no frames for N seconds"
+# and infer the sender is done -- an inactivity heuristic instead of a fixed window, adapting
+# to however long the stream actually is.
 last_frame_time = time.time()
-frame_count = 0
 
-# Stuttering-investigation instrumentation: two separate timestamp logs.
-# Kept separate on purpose: the network-isolation experiment cares about "arrival" intervals,
-# the VFI-isolation experiment cares about "render" intervals, and comparing
-# the two against each other is itself informative (e.g. VFI adding jitter
-# that wasn't present in the arrival stream).
+# First/last write timestamps, captured via a pad probe on filesink's sink pad -- runs
+# directly in the pipeline's own buffer-flow, not a Python signal callback, so it's the
+# closest we can get to "when did this frame actually get written" without added
+# Python-level scheduling latency. The gap between them is the throughput measure: how long
+# the whole system (network, decode, VFI, encode) took to process the stream end to end.
+first_write_time = None
+last_write_time = None
 
-# "arrival" = when a decoded frame reaches appsink (arm A) -- reflects
-# network/decode timing, upstream of any VFI processing. 
-arrival_log = []
+# Plain progress counters (no logging, just visibility) -- arrival tracks network/decode
+# keeping up, written tracks post-VFI output, which is the stage most likely to lag on CPU.
+arrived_count = 0
+written_count = 0
 
-# "render" = when a buffer actually reaches videosink's sink pad (arm B) -- reflects what the
-# viewer actually sees, downstream of VFI and the queue.
-render_log = []
 
 def track_activity(handler):
 	def wrapped(sink):
-		global last_frame_time, frame_count
+		global last_frame_time, arrived_count
 		last_frame_time = time.time()
-		frame_count += 1
-		arrival_log.append((frame_count, last_frame_time))
-		if frame_count == 1 or frame_count % 100 == 0:
-			print(f"[{frame_count} frames received]")
+		arrived_count += 1
+		if arrived_count == 1 or arrived_count % 120 == 0:
+			print(f"[arrived: {arrived_count}]")
 		return handler(sink)
 	return wrapped
 
 
-render_frame_count = 0
-
-
-def on_videosink_buffer(pad, info):
-	global render_frame_count
-	render_frame_count += 1
-	render_log.append((render_frame_count, time.time()))
+def on_filesink_buffer(pad, info):
+	global first_write_time, last_write_time, written_count
+	now = time.time()
+	if first_write_time is None:
+		first_write_time = now
+	last_write_time = now
+	written_count += 1
+	if written_count == 1 or written_count % 120 == 0:
+		print(f"[written: {written_count}]")
 	return Gst.PadProbeReturn.OK
-
-
-def write_frame_log():
-	path = str(VIDEOS_DIR / f"frame_log_{args.technique}.csv")
-	with open(path, "w", newline="") as f:
-		writer = csv.writer(f)
-		writer.writerow(["stage", "frame_index", "timestamp"])
-		for index, ts in arrival_log:
-			writer.writerow(["arrival", index, f"{ts:.6f}"])
-		for index, ts in render_log:
-			writer.writerow(["render", index, f"{ts:.6f}"])
-	print(f"Wrote {len(arrival_log)} arrival + {len(render_log)} render timestamps to {path}")
 
 
 # TCP gives a real EOS when the sender closes its end of the connection
@@ -488,7 +478,7 @@ appsink.connect("eos", on_appsink_eos)
 # Pad probes run directly in the pipeline's own buffer-flow, not in a Python
 # signal callback -- this is the closest we can get to "when did this buffer
 # actually reach the sink" without added Python-level scheduling latency.
-videosink.get_static_pad("sink").add_probe(Gst.PadProbeType.BUFFER, on_videosink_buffer)
+filesink.get_static_pad("sink").add_probe(Gst.PadProbeType.BUFFER, on_filesink_buffer)
 
 print(f"Listening on port {args.port}, technique={args.technique}...")
 
@@ -524,5 +514,9 @@ wait_for_eos_or_error(pipeline2, "pipeline2")
 
 pipeline.set_state(Gst.State.NULL)
 pipeline2.set_state(Gst.State.NULL)
-write_frame_log()
+
+if first_write_time is not None:
+	print(f"Time from first to last frame written: {last_write_time - first_write_time:.3f}s")
+else:
+	print("No frames were written.")
 print("Receiver finished.")
