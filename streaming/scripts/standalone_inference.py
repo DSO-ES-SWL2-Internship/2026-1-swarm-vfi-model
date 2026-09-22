@@ -1,5 +1,10 @@
+# Tests ML inference using ONNX runtime
+# Provides information and profiling about the use of NPU and other hardware
+
 import argparse
+import json
 import time
+from collections import defaultdict
 
 import numpy as np
 import onnxruntime as ort
@@ -29,6 +34,11 @@ parser.add_argument("--height", type=int, default=256)
 parser.add_argument("--provider", action="append",
                      help="execution provider to request, in priority order (repeatable flag). "
                           "Default: try the NPU EP first, fall back to CPU.")
+parser.add_argument("--profile", action="store_true",
+                     help="enable ONNX Runtime's built-in profiler and summarize which provider "
+                          "actually ran each node -- 'active' in get_providers() only means a "
+                          "provider is registered for the session, not that it's actually "
+                          "claiming any of the graph's real compute nodes.")
 args = parser.parse_args()
 
 requested_providers = args.provider or ["VSINPUExecutionProvider", "CPUExecutionProvider"]
@@ -38,7 +48,11 @@ requested_providers = args.provider or ["VSINPUExecutionProvider", "CPUExecution
 # here, since the NPU EP only exists in the NXP/Yocto-built onnxruntime.
 print(f"Available providers (compiled in): {ort.get_available_providers()}")
 
-session = ort.InferenceSession(args.model, providers=requested_providers)
+session_options = ort.SessionOptions()
+if args.profile:
+	session_options.enable_profiling = True
+
+session = ort.InferenceSession(args.model, sess_options=session_options, providers=requested_providers)
 
 # InferenceSession does NOT raise if a requested provider fails to load -- it silently
 # falls back to the next one in the list. get_providers() after construction is the only
@@ -75,6 +89,35 @@ for _ in range(n_runs):
 elapsed = time.perf_counter() - start
 print(f"Mean inference latency over {n_runs} runs: {elapsed / n_runs * 1000:.2f} ms")
 print(f"Output shape: {output.shape}, dtype: {output.dtype}, min/max: {output.min():.3f}/{output.max():.3f}")
+
+if args.profile:
+	# end_profiling() flushes and returns the path to a Chrome-trace-format JSON file. Only
+	# "Node"-category events with kernel timing carry a "provider" field in args -- these are
+	# the actual per-op executions, as opposed to session-level/allocation events which aren't
+	# tied to a specific provider. Summing duration by provider is the real answer to "is the
+	# NPU actually doing the work," independent of whether it's merely "active" in the session.
+	profile_path = session.end_profiling()
+	with open(profile_path) as f:
+		events = json.load(f)
+
+	provider_time_us = defaultdict(float)
+	provider_count = defaultdict(int)
+	for event in events:
+		provider = event.get("args", {}).get("provider")
+		if event.get("cat") == "Node" and provider:
+			provider_time_us[provider] += event.get("dur", 0)
+			provider_count[provider] += 1
+
+	total_us = sum(provider_time_us.values())
+	print(f"\nPer-provider node breakdown (from {profile_path}):")
+	if total_us == 0:
+		print("  No provider-tagged Node events found -- this onnxruntime build/version may not "
+		      "tag kernel-time events with 'provider' in profiling output.")
+	else:
+		for provider, time_us in sorted(provider_time_us.items(), key=lambda kv: -kv[1]):
+			pct = 100 * time_us / total_us
+			print(f"  {provider}: {provider_count[provider]} nodes, "
+			      f"{time_us / 1000:.2f} ms total ({pct:.1f}% of node time)")
 
 save_gray(output[0], args.output)
 print(f"Saved prediction to {args.output}")

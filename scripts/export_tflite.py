@@ -5,6 +5,7 @@
 
 import numpy as np
 import tensorflow as tf
+from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2
 
 import interpolate
 import training
@@ -32,7 +33,25 @@ def representative_dataset_gen():
 def convert():
   model = interpolate.load_model()
 
-  converter = tf.lite.TFLiteConverter.from_keras_model(model)
+  # from_concrete_functions with an explicit batch-size-1 TensorSpec (not from_keras_model,
+  # which would preserve the model's own dynamic/None batch dimension) -- every real consumer
+  # of this model (relay.py, receiver.py, standalone_inference.py) always runs one frame pair
+  # at a time, so a dynamic batch was never actually needed, and it breaks NPU delegation: a
+  # dynamic batch dim means Conv2DTranspose's output shape has to be computed at runtime via a
+  # STACK op combining several scalar tensors, which TIM-VX's graph compiler cannot handle
+  # ("Cannot calculate the reshape tensor 1 to 4") -- confirmed via an isolated single-layer
+  # test (same op, fixed batch = runs fully on the NPU delegate; dynamic batch = hard crash).
+  # Freezing the batch dimension removes that STACK op entirely, since the output shape becomes
+  # a build-time constant instead of something computed from the input at graph-run time.
+  input_spec = tf.TensorSpec([1] + list(model.inputs[0].shape[1:]), model.inputs[0].dtype)
+  concrete_func = tf.function(model).get_concrete_function(input_spec)
+  # tf.function(model) alone leaves the model's weights as ReadVariableOp nodes referencing
+  # live tf.Variable resource handles rather than frozen constants -- fine inside a normal
+  # Keras/eager context, but the bare concrete function handed to the converter doesn't carry
+  # that context, so calibration fails ("READ_VARIABLE ... variable != nullptr was not true").
+  # Freezing explicitly embeds the actual weight values as constants in the graph instead.
+  frozen_func = convert_variables_to_constants_v2(concrete_func)
+  converter = tf.lite.TFLiteConverter.from_concrete_functions([frozen_func], model)
   converter.optimizations = [tf.lite.Optimize.DEFAULT]
   converter.representative_dataset = representative_dataset_gen
   converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
