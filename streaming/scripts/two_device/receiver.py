@@ -11,13 +11,14 @@ from gi.repository import Gst, GstApp
 # Math/ML
 import numpy as np
 import onnxruntime as ort
-# import tensorflow as tf
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 VIDEOS_DIR = SCRIPT_DIR.parent.parent / "videos"            # streaming/videos -- two levels up
 MODELS_DIR = SCRIPT_DIR.parent.parent.parent / "artifacts"  # machine-learning/artifacts -- three levels up
 
 MODEL_PATH = str(MODELS_DIR / "toy_unet_int8.onnx")
+TFLITE_MODEL_PATH = str(MODELS_DIR / "toy_unet_int8.tflite")
+VX_DELEGATE_PATH = "/usr/lib/libvx_delegate.so"  # board-only -- NXP's eIQ NPU delegate for TIM-VX
 
 Gst.init(None)
 
@@ -94,72 +95,89 @@ class FrameHold:
 	def on_eos(self, sink):
 		self.appsrc.end_of_stream()
 
-# TFLite implementation of toy unet model
-# class ToyUnetBlender:
+# TFLite + NXP vx_delegate implementation of toy unet model -- runs on the i.MX8M Plus NPU.
+# tflite_runtime (not plain tensorflow) is the binding actually available on the board; the
+# import is done lazily in __init__ rather than at module level so this file still loads fine
+# on a dev machine that only has onnxruntime installed, as long as this technique isn't picked.
+class ToyUnetBlenderTFLite:
 
-# 	def __init__(self, appsrc):
-# 		self.appsrc = appsrc
-# 		self.prev_buffer = None
+	def __init__(self, appsrc):
+		self.appsrc = appsrc
+		self.prev_buffer = None
+		self.total_infer_time = 0.0
+		self.infer_calls = 0
 
-# 		self.interpreter = tf.lite.Interpreter(model_path=self.MODEL_PATH)
-# 		self.interpreter.allocate_tensors()
-# 		self.input_detail = self.interpreter.get_input_details()[0]
-# 		self.output_detail = self.interpreter.get_output_details()[0]
+		import tflite_runtime.interpreter as tflite
+		delegate = tflite.load_delegate(VX_DELEGATE_PATH)
+		self.interpreter = tflite.Interpreter(model_path=TFLITE_MODEL_PATH, experimental_delegates=[delegate])
+		self.interpreter.allocate_tensors()
+		self.input_detail = self.interpreter.get_input_details()[0]
+		self.output_detail = self.interpreter.get_output_details()[0]
 
-# 	def infer(self, buf1, buf2):
-# 		success1, map1 = buf1.map(Gst.MapFlags.READ)
-# 		success2, map2 = buf2.map(Gst.MapFlags.READ)
+	def infer(self, buf1, buf2):
+		success1, map1 = buf1.map(Gst.MapFlags.READ)
+		success2, map2 = buf2.map(Gst.MapFlags.READ)
 
-# 		frame1 = np.frombuffer(map1.data, dtype=np.uint8).reshape(256, 448)
-# 		frame2 = np.frombuffer(map2.data, dtype=np.uint8).reshape(256, 448)
+		frame1 = np.frombuffer(map1.data, dtype=np.uint8).reshape(256, 448)
+		frame2 = np.frombuffer(map2.data, dtype=np.uint8).reshape(256, 448)
 
-# 		buf1.unmap(map1)
-# 		buf2.unmap(map2)
+		buf1.unmap(map1)
+		buf2.unmap(map2)
 
-# 		in_zero_point = self.input_detail["quantization"][1]
-# 		f1_q = (frame1.astype(np.int16) + in_zero_point).astype(np.int8)
-# 		f2_q = (frame2.astype(np.int16) + in_zero_point).astype(np.int8)
-# 		input_tensor = np.stack([f1_q, f2_q], axis=-1)[None, ...]
+		# Fully INT8 in/out model (unlike ToyUnetBlenderONNX's QDQ model, which takes float32
+		# at its external boundary) -- both scales here are exactly 1/255 and 1/256, so the
+		# quantized value for an already-uint8 pixel is just a zero-point shift, no real
+		# scaling/rounding distortion. See export_tflite.py for how this model was produced.
+		in_zero_point = self.input_detail["quantization"][1]
+		f1_q = (frame1.astype(np.int16) + in_zero_point).astype(np.int8)
+		f2_q = (frame2.astype(np.int16) + in_zero_point).astype(np.int8)
+		input_tensor = np.stack([f1_q, f2_q], axis=-1)[None, ...]
 
-# 		self.interpreter.set_tensor(self.input_detail["index"], input_tensor)
-# 		self.interpreter.invoke()
-# 		output_q = self.interpreter.get_tensor(self.output_detail["index"])[0, ..., 0]
+		self.interpreter.set_tensor(self.input_detail["index"], input_tensor)
 
-# 		out_zero_point = self.output_detail["quantization"][1]
-# 		output_pixels = (output_q.astype(np.int16) - out_zero_point).astype(np.uint8)
+		infer_start = time.perf_counter()
+		self.interpreter.invoke()
+		self.total_infer_time += time.perf_counter() - infer_start
+		self.infer_calls += 1
 
-# 		return output_pixels
+		output_q = self.interpreter.get_tensor(self.output_detail["index"])[0, ..., 0]
 
-# 	def blend(self, buf1, buf2):
-# 		predicted_pixels = self.infer(buf1, buf2)
-# 		predicted_buf = Gst.Buffer.new_wrapped(predicted_pixels.tobytes())
-# 		predicted_buf.pts = (buf1.pts + buf2.pts) // 2
-# 		return predicted_buf
+		out_zero_point = self.output_detail["quantization"][1]
+		output_pixels = (output_q.astype(np.int16) - out_zero_point).astype(np.uint8)
 
-# 	def on_new_preroll(self, sink):
-# 		sample = sink.pull_preroll()
-# 		if not sample:
-# 			return Gst.FlowReturn.ERROR
-# 		buffer = sample.get_buffer()
-# 		self.appsrc.push_buffer(buffer)
-# 		self.prev_buffer = buffer
-# 		return Gst.FlowReturn.OK
+		return output_pixels
 
-# 	def on_new_sample(self, sink):
-# 		sample = sink.pull_sample()
-# 		if not sample:
-# 			return Gst.FlowReturn.ERROR
-# 		buffer = sample.get_buffer()
+	def blend(self, buf1, buf2):
+		predicted_pixels = self.infer(buf1, buf2)
+		predicted_buf = Gst.Buffer.new_wrapped(predicted_pixels.tobytes())
+		predicted_buf.pts = (buf1.pts + buf2.pts) // 2
+		return predicted_buf
 
-# 		predicted = self.blend(self.prev_buffer, buffer)
-# 		self.appsrc.push_buffer(predicted)
-# 		self.appsrc.push_buffer(buffer)
+	def on_new_preroll(self, sink):
+		sample = sink.pull_preroll()
+		if not sample:
+			return Gst.FlowReturn.ERROR
+		buffer = sample.get_buffer()
+		self.appsrc.push_buffer(buffer)
+		self.prev_buffer = buffer
+		return Gst.FlowReturn.OK
 
-# 		self.prev_buffer = buffer
-# 		return Gst.FlowReturn.OK
+	def on_new_sample(self, sink):
+		sample = sink.pull_sample()
+		if not sample:
+			return Gst.FlowReturn.ERROR
+		buffer = sample.get_buffer()
 
-# 	def on_eos(self, sink):
-# 		self.appsrc.end_of_stream()
+		predicted = self.blend(self.prev_buffer, buffer)
+		self.appsrc.push_buffer(predicted)
+		self.appsrc.push_buffer(buffer)
+
+		self.prev_buffer = buffer
+		return Gst.FlowReturn.OK
+
+	def on_eos(self, sink):
+		self.appsrc.end_of_stream()
+
 
 # ONNX runtime implementation of toy unet model
 class ToyUnetBlenderONNX:
@@ -167,6 +185,8 @@ class ToyUnetBlenderONNX:
 	def __init__(self, appsrc):
 		self.appsrc = appsrc
 		self.prev_buffer = None
+		self.total_infer_time = 0.0
+		self.infer_calls = 0
 
 		self.session = ort.InferenceSession(MODEL_PATH) # Begins ONNX runtime inference session
 		self.input_name = self.session.get_inputs()[0].name
@@ -191,7 +211,11 @@ class ToyUnetBlenderONNX:
 		f2 = frame2.astype(np.float32)[..., None] / 255.0
 		input_tensor = np.concatenate([f1, f2], axis=-1)[None, ...]
 
+		infer_start = time.perf_counter()
 		output = self.session.run([self.output_name], {self.input_name: input_tensor})[0]
+		self.total_infer_time += time.perf_counter() - infer_start
+		self.infer_calls += 1
+
 		output_pixels = (output[0, ..., 0] * 255).clip(0, 255).astype(np.uint8)
 
 		return output_pixels
@@ -314,8 +338,8 @@ TECHNIQUES = {
 	"passthrough": Passthrough,
 	"frame_hold": FrameHold,
 	"linear_blend": LinearBlender,
-# 	"toy_unet": ToyUnetBlender,
 	"toy_unet_onnx": ToyUnetBlenderONNX,
+	"toy_unet_tflite": ToyUnetBlenderTFLite,  # NPU (vx_delegate) -- board-only, needs tflite_runtime
 }
 
 parser_args = argparse.ArgumentParser()
@@ -519,4 +543,11 @@ if first_write_time is not None:
 	print(f"Time from first to last frame written: {last_write_time - first_write_time:.3f}s")
 else:
 	print("No frames were written.")
+
+# Only VFI techniques with a real model (ToyUnetBlenderONNX/TFLite) track this -- Passthrough/
+# FrameHold/LinearBlender have no inference step, so there's nothing to report for them.
+if getattr(technique, "infer_calls", 0) > 0:
+	mean_ms = technique.total_infer_time / technique.infer_calls * 1000
+	print(f"Mean inference latency ({technique.infer_calls} calls, technique={args.technique}): {mean_ms:.2f} ms/frame")
+
 print("Receiver finished.")

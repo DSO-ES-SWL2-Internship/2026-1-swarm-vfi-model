@@ -16,6 +16,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 MODELS_DIR = SCRIPT_DIR.parent.parent.parent / "artifacts"  # machine-learning/artifacts -- three levels up
 
 MODEL_PATH = str(MODELS_DIR / "toy_unet_int8.onnx")
+TFLITE_MODEL_PATH = str(MODELS_DIR / "toy_unet_int8.tflite")
+VX_DELEGATE_PATH = "/usr/lib/libvx_delegate.so"  # board-only -- NXP's eIQ NPU delegate for TIM-VX
 
 Gst.init(None)
 
@@ -102,6 +104,8 @@ class ToyUnetBlenderONNX:
 	def __init__(self, appsrc):
 		self.appsrc = appsrc
 		self.prev_buffer = None
+		self.total_infer_time = 0.0
+		self.infer_calls = 0
 
 		self.session = ort.InferenceSession(MODEL_PATH)
 		self.input_name = self.session.get_inputs()[0].name
@@ -124,8 +128,98 @@ class ToyUnetBlenderONNX:
 		f2 = frame2.astype(np.float32)[..., None] / 255.0
 		input_tensor = np.concatenate([f1, f2], axis=-1)[None, ...]
 
+		infer_start = time.perf_counter()
 		output = self.session.run([self.output_name], {self.input_name: input_tensor})[0]
+		self.total_infer_time += time.perf_counter() - infer_start
+		self.infer_calls += 1
+
 		output_pixels = (output[0, ..., 0] * 255).clip(0, 255).astype(np.uint8)
+
+		return output_pixels
+
+	def blend(self, buf1, buf2):
+		predicted_pixels = self.infer(buf1, buf2)
+		predicted_buf = Gst.Buffer.new_wrapped(predicted_pixels.tobytes())
+		predicted_buf.pts = (buf1.pts + buf2.pts) // 2
+		return predicted_buf
+
+	def on_new_preroll(self, sink):
+		sample = sink.pull_preroll()
+		if not sample:
+			return Gst.FlowReturn.ERROR
+		buffer = sample.get_buffer()
+		self.appsrc.push_buffer(buffer)
+		self.prev_buffer = buffer
+		return Gst.FlowReturn.OK
+
+	def on_new_sample(self, sink):
+		sample = sink.pull_sample()
+		if not sample:
+			return Gst.FlowReturn.ERROR
+		buffer = sample.get_buffer()
+
+		predicted = self.blend(self.prev_buffer, buffer)
+		self.appsrc.push_buffer(predicted)
+		self.appsrc.push_buffer(buffer)
+
+		self.prev_buffer = buffer
+		return Gst.FlowReturn.OK
+
+	def on_eos(self, sink):
+		self.appsrc.end_of_stream()
+
+
+# TFLite + NXP vx_delegate implementation of toy unet model -- runs on the i.MX8M Plus NPU.
+# This is the technique that actually matters for the relay node's whole reason for existing:
+# the iMX8 sits in the middle of the Pi->iMX8->VM path specifically to host NPU-accelerated VFI.
+# tflite_runtime (not plain tensorflow) is the binding available on the board; imported lazily
+# in __init__ rather than at module level, so this file still loads on a dev machine that only
+# has onnxruntime installed, as long as this technique isn't the one selected on the CLI.
+class ToyUnetBlenderTFLite:
+
+	def __init__(self, appsrc):
+		self.appsrc = appsrc
+		self.prev_buffer = None
+		self.total_infer_time = 0.0
+		self.infer_calls = 0
+
+		import tflite_runtime.interpreter as tflite
+		delegate = tflite.load_delegate(VX_DELEGATE_PATH)
+		self.interpreter = tflite.Interpreter(model_path=TFLITE_MODEL_PATH, experimental_delegates=[delegate])
+		self.interpreter.allocate_tensors()
+		self.input_detail = self.interpreter.get_input_details()[0]
+		self.output_detail = self.interpreter.get_output_details()[0]
+
+	def infer(self, buf1, buf2):
+		success1, map1 = buf1.map(Gst.MapFlags.READ)
+		success2, map2 = buf2.map(Gst.MapFlags.READ)
+
+		frame1 = np.frombuffer(map1.data, dtype=np.uint8).reshape(256, 448)
+		frame2 = np.frombuffer(map2.data, dtype=np.uint8).reshape(256, 448)
+
+		buf1.unmap(map1)
+		buf2.unmap(map2)
+
+		# Fully INT8 in/out model (unlike ToyUnetBlenderONNX's QDQ model, which takes float32
+		# at its external boundary) -- both scales here are exactly 1/255 and 1/256, so the
+		# quantized value for an already-uint8 pixel is just a zero-point shift, no real
+		# scaling/rounding distortion. See export_tflite.py for how this model was produced.
+		in_zero_point = self.input_detail["quantization"][1]
+		f1_q = (frame1.astype(np.int16) + in_zero_point).astype(np.int8)
+		f2_q = (frame2.astype(np.int16) + in_zero_point).astype(np.int8)
+		input_tensor = np.stack([f1_q, f2_q], axis=-1)[None, ...]
+
+		self.interpreter.set_tensor(self.input_detail["index"], input_tensor)
+
+		infer_start = time.perf_counter()
+		self.interpreter.invoke()
+		self.total_infer_time += time.perf_counter() - infer_start
+		self.infer_calls += 1
+
+		output_q = self.interpreter.get_tensor(self.output_detail["index"])[0, ..., 0]
+
+		out_zero_point = self.output_detail["quantization"][1]
+		output_pixels = (output_q.astype(np.int16) - out_zero_point).astype(np.uint8)
 
 		return output_pixels
 
@@ -248,6 +342,7 @@ TECHNIQUES = {
 	"frame_hold": FrameHold,
 	"linear_blend": LinearBlender,
 	"toy_unet_onnx": ToyUnetBlenderONNX,
+	"toy_unet_tflite": ToyUnetBlenderTFLite,  # NPU (vx_delegate) -- board-only, needs tflite_runtime
 }
 
 parser_args = argparse.ArgumentParser(description="iMX8 relay node: receives from the Pi, runs VFI, "
@@ -442,4 +537,11 @@ if first_relay_time is not None:
 	print(f"Time from first to last frame relayed: {last_relay_time - first_relay_time:.3f}s")
 else:
 	print("No frames were relayed.")
+
+# Only VFI techniques with a real model (ToyUnetBlenderONNX/TFLite) track this -- Passthrough/
+# FrameHold/LinearBlender have no inference step, so there's nothing to report for them.
+if getattr(technique, "infer_calls", 0) > 0:
+	mean_ms = technique.total_infer_time / technique.infer_calls * 1000
+	print(f"Mean inference latency ({technique.infer_calls} calls, technique={args.technique}): {mean_ms:.2f} ms/frame")
+
 print("Relay finished.")
