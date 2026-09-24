@@ -2,6 +2,11 @@
 # Plays the original and a received video side by side, scaled up, for visual comparison.
 # Usage: ./compare_videos.sh <received.mp4> [original.mp4]
 #   PANEL_WIDTH=1200 ./compare_videos.sh ...   larger panels (height follows the 448x256 aspect ratio)
+#   OFFSET=0 ./compare_videos.sh ...           start both at once instead of end-aligning
+#
+# The received video is missing the *start* of the original (the sender streams from launch,
+# before the receiver connects), so by default the received panel starts late by the duration
+# difference -- both videos then end together, and the same scene is shown side by side.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -9,8 +14,16 @@ RECEIVED="${1:?usage: $0 <received.mp4> [original.mp4]}"
 ORIGINAL="${2:-../videos/sintel_trailer-480p.mp4}"
 PANEL_WIDTH="${PANEL_WIDTH:-896}"
 PANEL_HEIGHT=$(( PANEL_WIDTH * 256 / 448 ))
-SINK="${SINK:-ximagesink}"
+# qos=false: with QoS on, the sink's lateness reports don't account for the received panel's
+# start offset, so its decoder thinks it is ~offset seconds late and drops almost every frame.
+SINK="${SINK:-ximagesink qos=false}"
 LABEL="$(basename "$RECEIVED" .mp4)"
+
+duration() { ffprobe -v error -show_entries format=duration -of csv=p=0 "$1"; }
+OFFSET="${OFFSET:-$(awk -v o="$(duration "$ORIGINAL")" -v r="$(duration "$RECEIVED")" \
+	'BEGIN { d = o - r; printf "%.3f", (d > 0 ? d : 0) }')}"
+OFFSET_NS=$(awk -v s="$OFFSET" 'BEGIN { printf "%d", s * 1e9 }')
+echo "Received video starts ${OFFSET}s after the original (ends aligned)"
 
 panel() {  # $1 = file, $2 = demuxer name, $3 = label
 	echo "filesrc location=\"$1\" ! qtdemux name=$2 $2.video_0 ! queue ! decodebin ! videoconvert ! videoscale \
@@ -19,6 +32,7 @@ panel() {  # $1 = file, $2 = demuxer name, $3 = label
 }
 
 eval gst-launch-1.0 \
-	compositor name=comp sink_1::xpos="$PANEL_WIDTH" ! videoconvert ! "$SINK" \
+	compositor name=comp background=black sink_1::xpos="$PANEL_WIDTH" sink_1::offset="$OFFSET_NS" \
+	! videoconvert ! "$SINK" \
 	"$(panel "$ORIGINAL" d0 "Original")" ! comp.sink_0 \
 	"$(panel "$RECEIVED" d1 "Received: $LABEL")" ! comp.sink_1
