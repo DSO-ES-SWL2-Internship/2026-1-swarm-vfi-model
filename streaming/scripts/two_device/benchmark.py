@@ -36,10 +36,12 @@ def run_once(run_index):
 	output = BENCH_DIR / f"{args.technique}_run{run_index}.mp4"
 	cmd = [sys.executable, str(SCRIPT_DIR / "receiver.py"), args.technique, "--host", args.host,
 	       "--port", str(args.port), "--idle-timeout", "15", "--output", str(output)]
-	for _ in range(args.connect_retries):
+	print(f"run {run_index}/{args.runs}: streaming from {args.host}:{args.port} (~1 min)...", flush=True)
+	for attempt in range(1, args.connect_retries + 1):
 		result = subprocess.run(cmd, capture_output=True, text=True)
 		if "failed to start" not in result.stdout:
 			break
+		print(f"  sender not ready yet, retrying ({attempt}/{args.connect_retries})...", flush=True)
 		time.sleep(2)  # sender is restarting between streams
 	else:
 		sys.exit(f"run {run_index}: could not connect to {args.host}:{args.port} -- is LOOP=1 ./run_sender.sh running?")
@@ -60,7 +62,7 @@ for i in range(1, args.runs + 1):
 	metrics = run_once(i)
 	results.append(metrics)
 	infer = f", inference {metrics['infer_ms']:.2f} ms" if metrics["infer_ms"] else ""
-	print(f"run {i}/{args.runs}: {metrics['duration_s']:.2f}s, {metrics['frames_arrived']:.0f} arrived, "
+	print(f"  done: {metrics['duration_s']:.2f}s, {metrics['frames_arrived']:.0f} arrived, "
 	      f"{metrics['buffers_written']:.0f} written, {metrics['output_fps']:.1f} fps{infer}", flush=True)
 	time.sleep(3)  # let the sender restart before the next run
 
