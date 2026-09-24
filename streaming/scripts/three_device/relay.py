@@ -34,6 +34,8 @@ def on_pad_added(src, new_pad, parser):
 
 
 class Passthrough:
+	FPS_MULTIPLIER = 1  # forwards frames 1:1; every other technique doubles them
+
 	def __init__(self, appsrc):
 		self.appsrc = appsrc
 
@@ -183,9 +185,21 @@ class ToyUnetBlenderTFLite:
 		self.total_infer_time = 0.0
 		self.infer_calls = 0
 
-		import tflite_runtime.interpreter as tflite
-		delegate = tflite.load_delegate(VX_DELEGATE_PATH)
-		self.interpreter = tflite.Interpreter(model_path=TFLITE_MODEL_PATH, experimental_delegates=[delegate])
+		# tflite_runtime + vx_delegate exist only on the iMX8; elsewhere (e.g. the VM) fall back to
+		# full TensorFlow's interpreter on CPU, so this technique still runs as a CPU baseline.
+		try:
+			from tflite_runtime.interpreter import Interpreter, load_delegate
+		except ImportError:
+			import tensorflow as tf
+			Interpreter, load_delegate = tf.lite.Interpreter, tf.lite.experimental.load_delegate
+
+		delegates = []
+		if Path(VX_DELEGATE_PATH).exists():
+			delegates.append(load_delegate(VX_DELEGATE_PATH))
+			print("toy_unet_tflite: running on the NPU (vx_delegate)")
+		else:
+			print(f"toy_unet_tflite: {VX_DELEGATE_PATH} not found -- running on CPU, NOT the NPU")
+		self.interpreter = Interpreter(model_path=TFLITE_MODEL_PATH, experimental_delegates=delegates)
 		self.interpreter.allocate_tensors()
 		self.input_detail = self.interpreter.get_input_details()[0]
 		self.output_detail = self.interpreter.get_output_details()[0]
@@ -311,6 +325,33 @@ def make_element(factory, name):
 	return element
 
 
+# set_state() only returns FAILURE; the actual reason (e.g. "Could not connect to
+# 172.20.10.2:5000") is posted as an ERROR message on the pipeline's bus.
+def report_start_failure(pipeline, label):
+	msg = pipeline.get_bus().timed_pop_filtered(0, Gst.MessageType.ERROR)
+	if msg is None:
+		print(f"{label}: failed to start (no error message posted)")
+		return
+	err, debug_info = msg.parse_error()
+	print(f"{label}: failed to start -- {err.message}")
+	print(f"{label}: debugging information: {debug_info or 'none'}")
+
+
+# x264enc (gst-plugins-ugly) isn't in the iMX8 image; avenc_mpeg4 (gst-libav) is, and MPEG-4
+# Part 2 is also much cheaper to encode on the board's weak CPU than H.264.
+def make_encoder(choice):
+	if choice == "auto":
+		choice = "x264" if Gst.ElementFactory.find("x264enc") else "mpeg4"
+	if choice == "x264":
+		encoder = make_element("x264enc", "encoder")
+	else:
+		encoder = make_element("avenc_mpeg4", "encoder")
+		if encoder:
+			encoder.set_property("bitrate", 2_000_000)  # default is 200 kbit/s -- visibly blocky
+	print(f"Encoder: {choice}")
+	return encoder
+
+
 def link_many(*elements):
 	for src, dst in zip(elements, elements[1:]):
 		if not src.link(dst):
@@ -360,6 +401,8 @@ parser_args.add_argument("--listen-port", type=int, default=5001,
                           help="port to listen on for the VM to connect -- defaults to 5001, "
                                "distinct from --port (5000), so this can be loopback-tested "
                                "against itself without a port clash")
+parser_args.add_argument("--encoder", choices=["auto", "x264", "mpeg4"], default="auto",
+                          help="re-encode codec: auto = x264 if installed, else mpeg4")
 args = parser_args.parse_args()
 
 # Arm A: receive (from Pi) -> demux (TS) -> decode -> downscale -> VFI technique -> appsink.
@@ -385,8 +428,8 @@ appsink = make_element("appsink", "appsink")
 appsrc = make_element("appsrc", "appsrc")
 queue = make_element("queue", "queue")
 convert2 = make_element("videoconvert", "convert2")
-# GRAY8 -> I420 happens in convert2 above (x264enc doesn't take raw GRAY8 directly).
-encoder = make_element("x264enc", "encoder")
+# GRAY8 -> I420 happens in convert2 above (neither encoder takes raw GRAY8 directly).
+encoder = make_encoder(args.encoder)
 muxer = make_element("mpegtsmux", "muxer")
 tcpserversink = make_element("tcpserversink", "tcpserversink")
 
@@ -440,10 +483,10 @@ appsrc.set_property("caps", caps)
 # however long the stream actually is.
 last_frame_time = time.time()
 
-# First/last relay timestamps, captured via a pad probe on tcpserversink's sink pad -- runs
-# directly in the pipeline's own buffer-flow, not a Python signal callback, so it's the closest
-# we can get to "when did this frame actually get sent onward" without added Python-level
-# scheduling latency. The gap between them is the throughput measure for this hop specifically.
+# First/last relay timestamps, captured via a pad probe on the encoder's src pad (one buffer per
+# encoded frame) -- not on tcpserversink, since mpegtsmux pushes buffer *lists* of TS packets,
+# which a BUFFER probe never sees. Runs in the pipeline's own buffer-flow, so no added
+# Python-level scheduling latency. The gap between them is the throughput measure for this hop.
 first_relay_time = None
 last_relay_time = None
 
@@ -465,7 +508,7 @@ def track_activity(handler):
 	return wrapped
 
 
-def on_tcpserversink_buffer(pad, info):
+def on_encoded_buffer(pad, info):
 	global first_relay_time, last_relay_time, relayed_count
 	now = time.time()
 	if first_relay_time is None:
@@ -496,16 +539,32 @@ appsink.connect("new-sample", track_activity(technique.on_new_sample))
 appsink.connect("new-preroll", track_activity(technique.on_new_preroll))
 appsink.connect("eos", on_appsink_eos)
 
-tcpserversink.get_static_pad("sink").add_probe(Gst.PadProbeType.BUFFER, on_tcpserversink_buffer)
+# Encoders need the real output framerate -- without one, avenc_mpeg4 assumes 25 fps and drops
+# frames that collide on that grid. VFI techniques emit two frames per input frame, Passthrough one.
+def on_appsink_caps(pad, info):
+	event = info.get_event()
+	if event.type == Gst.EventType.CAPS:
+		ok, fps_n, fps_d = event.parse_caps().get_structure(0).get_fraction("framerate")
+		if ok and fps_n > 0:
+			fps_n *= getattr(technique, "FPS_MULTIPLIER", 2)
+			out_caps = Gst.Caps.from_string(f"{caps.to_string()}, framerate={fps_n}/{fps_d}")
+			appsrc.set_property("caps", out_caps)
+			print(f"Output framerate: {fps_n}/{fps_d}")
+	return Gst.PadProbeReturn.OK
+
+
+appsink.get_static_pad("sink").add_probe(Gst.PadProbeType.EVENT_DOWNSTREAM, on_appsink_caps)
+
+encoder.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, on_encoded_buffer)
 
 print(f"Connecting to Pi at {args.host}:{args.port}, technique={args.technique}...")
 print(f"Listening on {args.listen_host}:{args.listen_port} for the VM to connect...")
 
 if pipeline2.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
-	print("Unable to set pipeline2 to the playing state.")
+	report_start_failure(pipeline2, "pipeline2")
 	exit(-1)
 if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
-	print("Unable to set the pipeline to the playing state.")
+	report_start_failure(pipeline, "pipeline")
 	exit(-1)
 
 # Primary termination path: a real EOS on pipeline's bus, posted once tcpclientsrc sees the Pi

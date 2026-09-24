@@ -16,14 +16,31 @@ Gst.init(None)
 # already-encoded stream and remuxes it from TS (network-transport container) into MP4 (a
 # seekable file container) for later playback/comparison. No decode, no appsrc/appsink Python
 # bridge, no encoder -- a single linear GStreamer pipeline is all this needs.
-def on_pad_added(src, new_pad, parser):
-	sink_pad = parser.get_static_pad("sink")
+#
+# The parser is picked here, once the stream's codec is known, rather than up front -- the relay
+# sends H.264 or MPEG-4 Part 2 depending on which encoder its device has (see relay.py's --encoder).
+PARSERS = {"video/x-h264": "h264parse", "video/mpeg": "mpeg4videoparse"}
 
-	caps = new_pad.get_current_caps()
-	structure = caps.get_structure(0)
-	if structure.get_name().startswith("video/"):
-		if new_pad.link(sink_pad) != Gst.PadLinkReturn.OK:
-			print("Failed to link demuxer pad to parser")
+
+def on_pad_added(src, new_pad, muxer):
+	codec = new_pad.get_current_caps().get_structure(0).get_name()
+	if not codec.startswith("video/"):
+		return
+	if codec not in PARSERS:
+		print(f"Unsupported video codec from relay: {codec}")
+		return
+
+	parser = make_element(PARSERS[codec], "parser")
+	pipeline.add(parser)
+	parser.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, on_parser_buffer)
+	if not parser.link(muxer):
+		print("parser could not be linked to muxer")
+		return
+	parser.sync_state_with_parent()
+	if new_pad.link(parser.get_static_pad("sink")) != Gst.PadLinkReturn.OK:
+		print("Failed to link demuxer pad to parser")
+		return
+	print(f"Receiving {codec}, parsing with {PARSERS[codec]}")
 
 
 def make_element(factory, name):
@@ -33,11 +50,16 @@ def make_element(factory, name):
 	return element
 
 
-def link_many(*elements):
-	for src, dst in zip(elements, elements[1:]):
-		if not src.link(dst):
-			return False
-	return True
+# set_state() only returns FAILURE; the actual reason (e.g. "Could not connect to
+# 172.20.10.2:5000") is posted as an ERROR message on the pipeline's bus.
+def report_start_failure(pipeline, label):
+	msg = pipeline.get_bus().timed_pop_filtered(0, Gst.MessageType.ERROR)
+	if msg is None:
+		print(f"{label}: failed to start (no error message posted)")
+		return
+	err, debug_info = msg.parse_error()
+	print(f"{label}: failed to start -- {err.message}")
+	print(f"{label}: debugging information: {debug_info or 'none'}")
 
 
 parser_args = argparse.ArgumentParser(description="VM receiver for the 3-device topology: pure "
@@ -55,13 +77,12 @@ output_path = args.output or str(VIDEOS_DIR / "received_3hop.mp4")
 
 tcpclientsrc = make_element("tcpclientsrc", "tcpclientsrc")
 demuxer = make_element("tsdemux", "demuxer")
-parser = make_element("h264parse", "parser")
 muxer = make_element("mp4mux", "muxer")
 filesink = make_element("filesink", "filesink")
 
 pipeline = Gst.Pipeline.new("receiver-remux-pipeline")
 
-elements = [tcpclientsrc, demuxer, parser, muxer, filesink]
+elements = [tcpclientsrc, demuxer, muxer, filesink]
 if not pipeline or not all(elements):
 	print("Failed to create pipeline or one of its elements")
 	exit(-1)
@@ -75,11 +96,11 @@ if not tcpclientsrc.link(demuxer):
 	print("tcpclientsrc could not be linked to demuxer")
 	exit(-1)
 
-if not link_many(parser, muxer, filesink):
-	print("Elements from parser to filesink could not be linked")
+if not muxer.link(filesink):
+	print("muxer could not be linked to filesink")
 	exit(-1)
 
-demuxer.connect("pad-added", on_pad_added, parser)
+demuxer.connect("pad-added", on_pad_added, muxer)
 
 tcpclientsrc.set_property("host", args.host)
 tcpclientsrc.set_property("port", args.port)
@@ -120,13 +141,13 @@ def on_filesink_buffer(pad, info):
 # Pad probes run directly in the pipeline's own buffer-flow -- the closest we can get to "when
 # did this buffer actually arrive/get written" without added Python-level scheduling latency.
 # No appsrc/appsink bridge exists here to hang callbacks off, unlike the other two scripts.
-parser.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, on_parser_buffer)
+# (the parser's probe is attached in on_pad_added, since the parser only exists from then on)
 filesink.get_static_pad("sink").add_probe(Gst.PadProbeType.BUFFER, on_filesink_buffer)
 
 print(f"Connecting to iMX8 at {args.host}:{args.port}...")
 
 if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
-	print("Unable to set the pipeline to the playing state.")
+	report_start_failure(pipeline, "pipeline")
 	exit(-1)
 
 # A single pipeline here (unlike the other two scripts' two-pipeline appsrc/appsink bridge) --
