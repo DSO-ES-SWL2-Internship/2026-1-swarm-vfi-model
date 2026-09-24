@@ -6,9 +6,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SENDER_HOST="${SENDER_HOST:-172.20.10.2}"  # Pi by default
+# SENDER_HOST="${SENDER_HOST:-172.20.10.2}"  # Uncomment for Pi sender
+SENDER_HOST="${SENDER_HOST:-172.20.10.5}"  # Uncomment for iMX8 sender
 PORT="${PORT:-5000}"
-TECHNIQUE="${TECHNIQUE:-toy_unet_onnx}"     # passthrough | frame_hold | linear_blend | toy_unet_onnx | toy_unet_tflite
+TECHNIQUE="${TECHNIQUE:-toy_unet_tflite}"     # passthrough | frame_hold | linear_blend | toy_unet_onnx | toy_unet_tflite
 IDLE_TIMEOUT="${IDLE_TIMEOUT:-60}"
 
 exec python3 receiver.py "$TECHNIQUE" --host "$SENDER_HOST" --port "$PORT" --idle-timeout "$IDLE_TIMEOUT" "$@"
