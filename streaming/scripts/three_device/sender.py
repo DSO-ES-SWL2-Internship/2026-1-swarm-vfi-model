@@ -5,6 +5,7 @@
 # Keep in sync with ../two_device/sender.py if either changes.
 
 import argparse
+import threading
 from pathlib import Path
 
 import gi
@@ -86,13 +87,30 @@ tcpserversink.set_property("sync", True)  # pace to the buffers' own timestamps,
 
 demuxer.connect("pad-added", on_pad_added, parser)
 
-print(f"Listening on {args.host}:{args.port} -- waiting for receiver to connect...")
+# Wait for the receiver before streaming: in PLAYING, tcpserversink streams in real time whether
+# or not anyone is connected, so everything before the receiver joins would be lost. PAUSED
+# already opens the listening socket; PLAYING (which starts the clock) waits for the first client.
+receiver_connected = threading.Event()
+tcpserversink.connect("client-added", lambda sink, client: receiver_connected.set())
 
+if pipeline.set_state(Gst.State.PAUSED) == Gst.StateChangeReturn.FAILURE:
+	print("Unable to set the pipeline to the paused state.")
+	exit(-1)
+
+print(f"Listening on {args.host}:{args.port} -- waiting for receiver to connect...")
+bus = pipeline.get_bus()
+while not receiver_connected.wait(timeout=0.5):
+	msg = bus.pop_filtered(Gst.MessageType.ERROR)
+	if msg is not None:
+		err, debug_info = msg.parse_error()
+		print(f"error from element {msg.src.get_name()}: {err.message}")
+		exit(-1)
+
+print("Receiver connected -- starting stream.")
 if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
 	print("Unable to set the pipeline to the playing state.")
 	exit(-1)
 
-bus = pipeline.get_bus()
 msg = bus.timed_pop_filtered(Gst.CLOCK_TIME_NONE, Gst.MessageType.ERROR | Gst.MessageType.EOS)
 if msg is not None:
 	if msg.type == Gst.MessageType.ERROR:
