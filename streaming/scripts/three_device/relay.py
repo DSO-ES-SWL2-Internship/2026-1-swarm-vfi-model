@@ -337,19 +337,44 @@ def report_start_failure(pipeline, label):
 	print(f"{label}: debugging information: {debug_info or 'none'}")
 
 
-# x264enc (gst-plugins-ugly) isn't in the iMX8 image; avenc_mpeg4 (gst-libav) is, and MPEG-4
-# Part 2 is also much cheaper to encode on the board's weak CPU than H.264.
+# auto prefers the iMX8's hardware encoder (vpuenc_h264, VPU), then x264enc (CPU, not in the iMX8
+# image), then avenc_mpeg4 (CPU, always available via gst-libav). All target ~2 Mbit/s so
+# comparisons between them are fair.
 def make_encoder(choice):
 	if choice == "auto":
-		choice = "x264" if Gst.ElementFactory.find("x264enc") else "mpeg4"
-	if choice == "x264":
-		encoder = make_element("x264enc", "encoder")
+		if Gst.ElementFactory.find("vpuenc_h264"):
+			choice = "vpu"
+		elif Gst.ElementFactory.find("x264enc"):
+			choice = "x264"
+		else:
+			choice = "mpeg4"
+	if choice == "vpu":
+		encoder = make_element("vpuenc_h264", "encoder")
+		if encoder:
+			encoder.set_property("bitrate", 2000)  # kbps; default 0 = automatic
+	elif choice == "x264":
+		encoder = make_element("x264enc", "encoder")  # default bitrate 2048 kbps
 	else:
 		encoder = make_element("avenc_mpeg4", "encoder")
 		if encoder:
-			encoder.set_property("bitrate", 2_000_000)  # default is 200 kbit/s -- visibly blocky
+			encoder.set_property("bitrate", 2_000_000)  # bits/s; default 200 kbit/s is visibly blocky
 	print(f"Encoder: {choice}")
 	return encoder
+
+
+# auto prefers the iMX8's hardware decoder (vpudec, VPU), else avdec_h264 (CPU, gst-libav).
+def make_decoder(choice):
+	if choice == "auto":
+		choice = "vpu" if Gst.ElementFactory.find("vpudec") else "cpu"
+	if choice == "vpu":
+		decoder = make_element("vpudec", "decoder")
+		if decoder:
+			# Default true: adaptively drops frames when busy, which would silently skew measurements.
+			decoder.set_property("frame-drop", False)
+	else:
+		decoder = make_element("avdec_h264", "decoder")
+	print(f"Decoder: {choice}")
+	return decoder
 
 
 def link_many(*elements):
@@ -401,8 +426,10 @@ parser_args.add_argument("--listen-port", type=int, default=5001,
                           help="port to listen on for the VM to connect -- defaults to 5001, "
                                "distinct from --port (5000), so this can be loopback-tested "
                                "against itself without a port clash")
-parser_args.add_argument("--encoder", choices=["auto", "x264", "mpeg4"], default="auto",
-                          help="re-encode codec: auto = x264 if installed, else mpeg4")
+parser_args.add_argument("--decoder", choices=["auto", "cpu", "vpu"], default="auto",
+                          help="H.264 decoder: auto = vpu (hardware) if installed, else cpu (avdec_h264)")
+parser_args.add_argument("--encoder", choices=["auto", "vpu", "x264", "mpeg4"], default="auto",
+                          help="re-encode codec: auto = vpu (hardware) if installed, else x264, else mpeg4")
 args = parser_args.parse_args()
 
 # Arm A: receive (from Pi) -> demux (TS) -> decode -> downscale -> VFI technique -> appsink.
@@ -411,7 +438,7 @@ args = parser_args.parse_args()
 tcpclientsrc = make_element("tcpclientsrc", "tcpclientsrc")
 demuxer = make_element("tsdemux", "demuxer")
 parser = make_element("h264parse", "parser")
-decoder = make_element("avdec_h264", "decoder")
+decoder = make_decoder(args.decoder)
 convert = make_element("videoconvert", "convert")
 scale = make_element("videoscale", "scale")
 capsfilter = make_element("capsfilter", "capsfilter")
