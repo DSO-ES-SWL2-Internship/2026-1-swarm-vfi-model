@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 RECEIVED="${1:?usage: $0 <received.mp4> [original.mp4]}"
-ORIGINAL="${2:-../videos/sintel_trailer-480p.mp4}"
+ORIGINAL="${2:-../../videos/sintel_trailer-480p.mp4}"
 PANEL_WIDTH="${PANEL_WIDTH:-896}"
 PANEL_HEIGHT=$(( PANEL_WIDTH * 256 / 448 ))
 # qos=false: with QoS on, the sink's lateness reports don't account for the received panel's
