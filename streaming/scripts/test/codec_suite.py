@@ -27,13 +27,16 @@ FRAMES = 1251  # every sintel_trailer-*.mp4 source has 1251 video frames
 
 DECODERS = {
 	"cpu": "avdec_h264",
-	# frame-drop defaults to true: it would skip frames when busy and flatter the VPU's numbers.
+	# frame-drop defaults to true: it would skip frames when busy, making VPU's numbers better than is fair.
 	"vpu": "vpudec frame-drop=false",
 }
 SCALERS = {
-	"cpu": "videoconvert ! videoscale ! video/x-raw,width=448,height=256,format=GRAY8",
-	# G2D resizes; the grey conversion afterwards is on the CPU but only touches 448x256 frames.
-	"g2d": "imxvideoconvert_g2d ! video/x-raw,width=448,height=256 ! videoconvert ! video/x-raw,format=GRAY8",
+	# Through RGB -> full-range grey (0-255), matching training (PIL convert("L")); a direct YUV -> GRAY8
+	# copies the video-range (16-235) luma plane instead. Scaling first keeps that extra step cheap.
+	"cpu": "videoscale ! video/x-raw,width=448,height=256 ! videoconvert ! video/x-raw,format=RGBx ! videoconvert ! video/x-raw,format=GRAY8",
+	# G2D resizes (output is RGB only); grey conversion afterwards is on the CPU at 448x256. The GRAY8
+	# colorimetry was chosen by measurement: it is the setting whose output matches the training convention.
+	"g2d": "imxvideoconvert_g2d ! video/x-raw,width=448,height=256 ! videoconvert ! video/x-raw,format=GRAY8,colorimetry=2:4:0:0",
 }
 ENCODERS = {  # (encoder, parser needed to mux its output into MP4 for --keep-output)
 	"cpu": ("avenc_mpeg4 bitrate=2000000", "mpeg4videoparse"),
@@ -43,10 +46,11 @@ ENCODERS = {  # (encoder, parser needed to mux its output into MP4 for --keep-ou
 
 def build_pipeline(video, dec, scale, enc, output_path):
 	encoder, parser = ENCODERS[enc]
-	# The videoconvert before the encoder turns GRAY8 into a format the encoder accepts.
+	# Grey -> RGB -> I420 before the encoder: a direct GRAY8 -> I420 copies full-range values into a
+	# plane players read as video range. I420 is forced so vpuenc_h264 never gets RGB to convert itself.
 	sink = f"{parser} ! mp4mux ! filesink location={output_path}" if output_path else "fakesink"
 	return (f"filesrc location={video} ! qtdemux ! h264parse ! {DECODERS[dec]} ! {SCALERS[scale]} "
-	        f"! videoconvert ! {encoder} ! {sink}")
+	        f"! videoconvert ! video/x-raw,format=RGBx ! videoconvert ! video/x-raw,format=I420 ! {encoder} ! {sink}")
 
 
 def run_once(pipeline):
@@ -93,6 +97,7 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 csv_path = RESULTS_DIR / f"codec_suite_{stamp}.csv"
 summary_path = RESULTS_DIR / f"codec_suite_{stamp}.txt"
 
+# Execute runs and print out per-run results
 total = args.repeats * len(videos) * len(configs)
 rows, n = [], 0
 # Repeats are the OUTER loop: each pass visits every config once, so slow drift over the session
@@ -114,12 +119,13 @@ for repeat in range(1, args.repeats + 1):
 			result = f"{row['fps']:6.1f} fps  {cpu:6.1f} CPU-s" if m["ok"] else f"FAILED: {m['error']}"
 			print(f"[{n:3d}/{total}] repeat {repeat}  {res:>5}  {config:<22} {result}", flush=True)
 
+# Write results to a csv file
 with open(csv_path, "w", newline="") as f:
 	writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
 	writer.writeheader()
 	writer.writerows(rows)
 
-# Summary: mean (and stdev when repeated) per resolution x config, successful runs only.
+# Print and write summary: mean (and stdev when repeated) per resolution x config, successful runs only.
 lines = [f"Codec suite {stamp}: {args.repeats} repeat(s), {FRAMES} frames per run, flat out.",
          "CPU encoder = avenc_mpeg4 (MPEG-4 Part 2); VPU encoder = vpuenc_h264 (H.264).", "",
          f"{'res':>5}  {'decode -> scale -> encode':<24} {'fps mean':>9} {'sd':>6} {'CPU-s mean':>11} {'sd':>6}  runs"]
