@@ -1,4 +1,5 @@
 import argparse
+import os
 import time
 from pathlib import Path
 
@@ -19,6 +20,10 @@ MODELS_DIR = SCRIPT_DIR.parent.parent.parent / "artifacts"  # machine-learning/a
 MODEL_PATH = str(MODELS_DIR / "toy_unet_int8.onnx")
 TFLITE_MODEL_PATH = str(MODELS_DIR / "toy_unet_int8.tflite")
 VX_DELEGATE_PATH = "/usr/lib/libvx_delegate.so"  # board-only -- NXP's eIQ NPU delegate for TIM-VX
+# The NPU driver can save its compiled graph (*.nb) here and reuse it on later runs, skipping the
+# ~15s first-invoke compile (NXP i.MX ML User's Guide, sec. 8.1.3). Keyed by a hash of the model,
+# so a re-exported model recompiles automatically.
+VX_CACHE_DIR = MODELS_DIR / "vx_cache"
 
 Gst.init(None)
 
@@ -119,6 +124,9 @@ class ToyUnetBlenderTFLite:
 
 		delegates = []
 		if Path(VX_DELEGATE_PATH).exists():
+			VX_CACHE_DIR.mkdir(exist_ok=True)
+			os.environ.setdefault("VIV_VX_ENABLE_CACHE_GRAPH_BINARY", "1")  # read by the driver at load
+			os.environ.setdefault("VIV_VX_CACHE_BINARY_GRAPH_DIR", str(VX_CACHE_DIR))
 			delegates.append(load_delegate(VX_DELEGATE_PATH))
 			print("toy_unet_tflite: running on the NPU (vx_delegate)")
 		else:
@@ -127,6 +135,17 @@ class ToyUnetBlenderTFLite:
 		self.interpreter.allocate_tensors()
 		self.input_detail = self.interpreter.get_input_details()[0]
 		self.output_detail = self.interpreter.get_output_details()[0]
+
+		# The NPU compiles its graph on the FIRST real invoke(), a one-time ~15s stall (measured
+		# separately with benchmark_model). Left to happen mid-stream, it blocks the frame callback for
+		# that long: frames keep arriving from the network with nothing reading them, and some are
+		# dropped (~9% of the stream in testing). Pre-warming here moves the stall to setup instead.
+		print("toy_unet_tflite: warming up the model (~15s on the NPU the first time; cached after that)...")
+		warmup_start = time.perf_counter()
+		dummy_input = np.zeros(self.input_detail["shape"], dtype=self.input_detail["dtype"])
+		self.interpreter.set_tensor(self.input_detail["index"], dummy_input)
+		self.interpreter.invoke()
+		print(f"toy_unet_tflite: warm-up took {time.perf_counter() - warmup_start:.1f}s")
 
 	def infer(self, buf1, buf2):
 		success1, map1 = buf1.map(Gst.MapFlags.READ)
