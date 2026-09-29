@@ -3,6 +3,8 @@
 # Usage: [PI_HOST=ip] [TECHNIQUE=name] ./run_relay.sh [extra relay.py args]
 set -euo pipefail
 cd "$(dirname "$0")"
+# Print Python's output immediately even when piped (e.g. | tee log.txt), instead of buffering it.
+export PYTHONUNBUFFERED=1
 
 PI_HOST="${PI_HOST:-172.20.10.2}"
 PI_PORT="${PI_PORT:-5000}"

@@ -3,8 +3,10 @@
 # Usage: [IMX8_HOST=ip] ./run_receiver.sh [extra receiver.py args]
 set -euo pipefail
 cd "$(dirname "$0")"
+# Print Python's output immediately even when piped (e.g. | tee log.txt), instead of buffering it.
+export PYTHONUNBUFFERED=1
 
-IMX8_HOST="${IMX8_HOST:-172.20.10.5}"
+IMX8_HOST="${IMX8_HOST:-172.20.10.8}"
 PORT="${PORT:-5001}"
 IDLE_TIMEOUT="${IDLE_TIMEOUT:-60}"
 

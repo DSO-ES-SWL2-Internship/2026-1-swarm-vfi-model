@@ -5,6 +5,8 @@
 #   iMX8 sender: SENDER_HOST=172.20.10.5 ./run_receiver.sh
 set -euo pipefail
 cd "$(dirname "$0")"
+# Print Python's output immediately even when piped (e.g. | tee log.txt), instead of buffering it.
+export PYTHONUNBUFFERED=1
 
 SENDER_HOST="${SENDER_HOST:-172.20.10.2}"  # Uncomment for Pi sender
 # SENDER_HOST="${SENDER_HOST:-172.20.10.5}"  # Uncomment for iMX8 sender

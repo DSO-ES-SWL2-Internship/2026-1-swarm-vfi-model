@@ -5,6 +5,8 @@
 #   Stop it with Ctrl+C.
 set -euo pipefail
 cd "$(dirname "$0")"
+# Print Python's output immediately even when piped (e.g. | tee log.txt), instead of buffering it.
+export PYTHONUNBUFFERED=1
 
 PORT="${PORT:-5000}"
 
