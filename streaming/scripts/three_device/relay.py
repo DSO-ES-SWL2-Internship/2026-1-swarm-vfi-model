@@ -45,13 +45,6 @@ class Passthrough:
 	def __init__(self, appsrc):
 		self.appsrc = appsrc
 
-	def on_new_preroll(self, sink):
-		sample = sink.pull_preroll()
-		if not sample:
-			return Gst.FlowReturn.ERROR
-		self.appsrc.push_buffer(sample.get_buffer())
-		return Gst.FlowReturn.OK
-
 	def on_new_sample(self, sink):
 		sample = sink.pull_sample()
 		if not sample:
@@ -77,20 +70,15 @@ class FrameHold:
 		held_buf.pts = (prev_buf.pts + curr_buf.pts) // 2
 		return held_buf
 
-	def on_new_preroll(self, sink):
-		sample = sink.pull_preroll()
-		if not sample:
-			return Gst.FlowReturn.ERROR
-		buffer = sample.get_buffer()
-		self.appsrc.push_buffer(buffer)
-		self.prev_buffer = buffer
-		return Gst.FlowReturn.OK
-
 	def on_new_sample(self, sink):
 		sample = sink.pull_sample()
 		if not sample:
 			return Gst.FlowReturn.ERROR
 		buffer = sample.get_buffer()
+		if self.prev_buffer is None:  # first frame: nothing to interpolate from yet
+			self.appsrc.push_buffer(buffer)
+			self.prev_buffer = buffer
+			return Gst.FlowReturn.OK
 
 		held = self.hold(self.prev_buffer, buffer)
 		self.appsrc.push_buffer(held)
@@ -151,20 +139,15 @@ class ToyUnetBlenderONNX:
 		predicted_buf.pts = (buf1.pts + buf2.pts) // 2
 		return predicted_buf
 
-	def on_new_preroll(self, sink):
-		sample = sink.pull_preroll()
-		if not sample:
-			return Gst.FlowReturn.ERROR
-		buffer = sample.get_buffer()
-		self.appsrc.push_buffer(buffer)
-		self.prev_buffer = buffer
-		return Gst.FlowReturn.OK
-
 	def on_new_sample(self, sink):
 		sample = sink.pull_sample()
 		if not sample:
 			return Gst.FlowReturn.ERROR
 		buffer = sample.get_buffer()
+		if self.prev_buffer is None:  # first frame: nothing to interpolate from yet
+			self.appsrc.push_buffer(buffer)
+			self.prev_buffer = buffer
+			return Gst.FlowReturn.OK
 
 		predicted = self.blend(self.prev_buffer, buffer)
 		self.appsrc.push_buffer(predicted)
@@ -263,20 +246,15 @@ class ToyUnetBlenderTFLite:
 		predicted_buf.pts = (buf1.pts + buf2.pts) // 2
 		return predicted_buf
 
-	def on_new_preroll(self, sink):
-		sample = sink.pull_preroll()
-		if not sample:
-			return Gst.FlowReturn.ERROR
-		buffer = sample.get_buffer()
-		self.appsrc.push_buffer(buffer)
-		self.prev_buffer = buffer
-		return Gst.FlowReturn.OK
-
 	def on_new_sample(self, sink):
 		sample = sink.pull_sample()
 		if not sample:
 			return Gst.FlowReturn.ERROR
 		buffer = sample.get_buffer()
+		if self.prev_buffer is None:  # first frame: nothing to interpolate from yet
+			self.appsrc.push_buffer(buffer)
+			self.prev_buffer = buffer
+			return Gst.FlowReturn.OK
 
 		predicted = self.blend(self.prev_buffer, buffer)
 		self.appsrc.push_buffer(predicted)
@@ -310,22 +288,16 @@ class LinearBlender:
 		blended_buf.pts = (buf1.pts + buf2.pts) // 2
 		return blended_buf
 
-	def on_new_preroll(self, sink):
-		sample = sink.pull_preroll()
-		if not sample:
-			return Gst.FlowReturn.ERROR
-
-		buffer = sample.get_buffer()
-		self.appsrc.push_buffer(buffer)
-		self.prev_buffer = buffer
-		return Gst.FlowReturn.OK
-
 	def on_new_sample(self, sink):
 		sample = sink.pull_sample()
 		if not sample:
 			return Gst.FlowReturn.ERROR
 
 		buffer = sample.get_buffer()
+		if self.prev_buffer is None:  # first frame: nothing to interpolate from yet
+			self.appsrc.push_buffer(buffer)
+			self.prev_buffer = buffer
+			return Gst.FlowReturn.OK
 
 		blended = self.blend(self.prev_buffer, buffer)
 		self.appsrc.push_buffer(blended)
@@ -618,7 +590,17 @@ def on_appsink_eos(sink):
 
 technique = TECHNIQUES[args.technique](appsrc)
 appsink.connect("new-sample", track_activity(technique.on_new_sample))
-appsink.connect("new-preroll", track_activity(technique.on_new_preroll))
+# appsink delivers its first frame twice: once as the preroll sample, then again as the first
+# regular sample. Handling both pushed frame 0 twice -- shifting the output one frame behind the
+# source and starting the stream with duplicate timestamps (PTS 0, and a fake "interpolated"
+# frame between frame 0 and itself, also PTS 0), which vpuenc_h264 turns into buffers with no PTS
+# that mp4mux then rejects. Only the regular samples are used; the preroll copy is discarded.
+def discard_preroll(sink):
+	sink.pull_preroll()
+	return Gst.FlowReturn.OK
+
+
+appsink.connect("new-preroll", discard_preroll)
 appsink.connect("eos", on_appsink_eos)
 
 # Encoders need the real output framerate -- without one, avenc_mpeg4 assumes 25 fps and drops
