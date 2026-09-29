@@ -160,6 +160,7 @@ while True:
 		if msg.type == Gst.MessageType.ERROR:
 			err, debug_info = msg.parse_error()
 			print(f"pipeline: error from element {msg.src.get_name()}: {err.message}")
+			print(f"pipeline: debugging information: {debug_info or 'none'}")
 		else:
 			print("pipeline: End-Of-Stream reached -- iMX8 closed the connection.")
 		break
