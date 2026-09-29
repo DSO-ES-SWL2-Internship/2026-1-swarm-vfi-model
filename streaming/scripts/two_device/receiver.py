@@ -6,7 +6,7 @@ from pathlib import Path
 import gi
 gi.require_version("Gst", "1.0")
 gi.require_version("GstApp", "1.0")
-from gi.repository import Gst, GstApp
+from gi.repository import GLib, Gst, GstApp
 
 # Math/ML
 import numpy as np
@@ -381,6 +381,42 @@ def make_decoder(choice):
 	return decoder
 
 
+# Scales to the model's 448x256 greyscale input. Going through RGB yields full-range grey (0-255),
+# matching how the training data was made (PIL convert("L")); YUV -> GRAY8 directly just copies the
+# video-range (16-235) luma plane, i.e. lower-contrast input than the model was trained on. The G2D
+# chain's GRAY8 colorimetry was chosen by measurement: it is the setting whose output matches training.
+SCALERS = {
+	"cpu": "videoscale ! video/x-raw,width=448,height=256 ! videoconvert ! video/x-raw,format=RGBx ! videoconvert ! capsfilter caps=video/x-raw,format=GRAY8",
+	"g2d": "imxvideoconvert_g2d ! video/x-raw,width=448,height=256 ! videoconvert ! capsfilter caps=\"video/x-raw,format=GRAY8,colorimetry=2:4:0:0\"",
+}
+
+
+def make_scaler(choice, decoder):
+	if choice == "auto":
+		# vpudec -> CPU scaling is slow and mis-sizes frames (the VPU pads them); G2D handles both.
+		from_vpu = decoder is not None and decoder.get_factory().get_name() == "vpudec"
+		choice = "g2d" if from_vpu and Gst.ElementFactory.find("imxvideoconvert_g2d") else "cpu"
+	try:
+		scaler = Gst.parse_bin_from_description(SCALERS[choice], True)
+	except GLib.Error as err:
+		print(f"Failed to create scaler ({choice}): {err.message}")
+		return None
+	scaler.set_name("scaler")
+	print(f"Scaler: {choice}")
+	return scaler
+
+
+# GRAY8 -> encoder input via RGB: a direct GRAY8 -> I420 copies 0-255 into the luma plane, which
+# players read as video range (16-235), crushing shadows and highlights. Through RGB it is mapped
+# back properly. I420 is forced so encoders that also accept RGB (vpuenc_h264) never convert it
+# themselves with their own, unverified range handling.
+def make_output_converter():
+	converter = Gst.parse_bin_from_description(
+		"videoconvert ! video/x-raw,format=RGBx ! videoconvert ! capsfilter caps=video/x-raw,format=I420", True)
+	converter.set_name("convert2")
+	return converter
+
+
 def link_many(*elements):
 	for src, dst in zip(elements, elements[1:]):
 		if not src.link(dst):
@@ -428,6 +464,8 @@ parser_args.add_argument("--output", type=str, default=None,
                                "(default: streaming/videos/received_<technique>.mp4)")
 parser_args.add_argument("--decoder", choices=["auto", "cpu", "vpu"], default="auto",
                           help="H.264 decoder: auto = vpu (hardware) if installed, else cpu (avdec_h264)")
+parser_args.add_argument("--scaler", choices=["auto", "cpu", "g2d"], default="auto",
+                          help="scale/greyscale on: auto = g2d when decoding on the VPU, else cpu")
 parser_args.add_argument("--encoder", choices=["auto", "vpu", "x264", "mpeg4"], default="auto",
                           help="output codec: auto = vpu (hardware) if installed, else x264, else mpeg4")
 args = parser_args.parse_args()
@@ -438,9 +476,7 @@ tcpclientsrc = make_element("tcpclientsrc", "tcpclientsrc")
 demuxer = make_element("tsdemux", "demuxer")
 parser = make_element("h264parse", "parser")
 decoder = make_decoder(args.decoder)
-convert = make_element("videoconvert", "convert")
-scale = make_element("videoscale", "scale")
-capsfilter = make_element("capsfilter", "capsfilter")
+scaler = make_scaler(args.scaler, decoder)
 appsink = make_element("appsink", "appsink")
 
 # Arm B: appsrc -> queue -> convert -> encoder -> muxer -> filesink. Writes a real, seekable
@@ -459,8 +495,8 @@ appsink = make_element("appsink", "appsink")
 # practice regardless of what's downstream.
 appsrc = make_element("appsrc", "appsrc")
 queue = make_element("queue", "queue")
-convert2 = make_element("videoconvert", "convert2")
-# GRAY8 -> I420 happens in convert2 above (neither encoder takes raw GRAY8 directly).
+convert2 = make_output_converter()
+# GRAY8 -> RGB -> I420 happens in convert2 above (no encoder takes GRAY8; see make_output_converter).
 encoder = make_encoder(args.encoder)
 muxer = make_element("mp4mux", "muxer")
 filesink = make_element("filesink", "filesink")
@@ -468,13 +504,13 @@ filesink = make_element("filesink", "filesink")
 pipeline = Gst.Pipeline.new("receiver-pipeline")
 pipeline2 = Gst.Pipeline.new("receiver-pipeline-2")
 
-elements = [tcpclientsrc, demuxer, parser, decoder, convert, scale, capsfilter, appsink,
+elements = [tcpclientsrc, demuxer, parser, decoder, scaler, appsink,
             appsrc, queue, convert2, encoder, muxer, filesink]
 if not pipeline or not pipeline2 or not all(elements):
 	print("Failed to create pipeline or one of its elements")
 	exit(-1)
 
-for el in [tcpclientsrc, demuxer, parser, decoder, convert, scale, capsfilter, appsink]:
+for el in [tcpclientsrc, demuxer, parser, decoder, scaler, appsink]:
 	pipeline.add(el)
 for el in [appsrc, queue, convert2, encoder, muxer, filesink]:
 	pipeline2.add(el)
@@ -487,7 +523,7 @@ if not tcpclientsrc.link(demuxer):
 	print("tcpclientsrc could not be linked to demuxer")
 	exit(-1)
 
-if not link_many(parser, decoder, convert, scale, capsfilter, appsink):
+if not link_many(parser, decoder, scaler, appsink):
 	print("Elements from parser to appsink could not be linked")
 	exit(-1)
 
@@ -510,7 +546,6 @@ filesink.set_property("sync", False)
 filesink.set_property("location", output_path)
 
 caps = Gst.Caps.from_string("video/x-raw, width=448, height=256, format=GRAY8")
-capsfilter.set_property("caps", caps)
 appsrc.set_property("caps", caps)
 
 ## PERFORMANCE TIMING
