@@ -79,13 +79,13 @@ for row, (metric, ylabel, unit) in enumerate([(0, "frames per second", "fps"), (
 			ax.errorbar(x, means, yerr=sds, color=color, linewidth=2.5, marker="o", markersize=8,
 			            markeredgecolor=SURFACE, markeredgewidth=1.5, capsize=4, elinewidth=1.5, zorder=3)
 			ends.append(means[-1]); colors.append(color)
-		# Labels may be nudged apart; a leader line and a dot in the series colour tie each one
-		# back to its line (the text itself stays in neutral ink).
+		# Labels may be nudged apart; a thin leader line in the series colour ties each one back to
+		# its line (no marker at the label end -- it would read as an extra data point).
 		for y, value, color in zip(spread_labels(ends, ymax * 0.07), ends, colors):
 			if value != value:  # NaN: configuration failed at this resolution
 				continue
-			ax.plot([x[-1] + 0.04, x[-1] + 0.14], [value, y], color=color, linewidth=1.2, zorder=2, clip_on=False)
-			ax.plot(x[-1] + 0.17, y, "o", color=color, markersize=6, zorder=3, clip_on=False)
+			ax.plot([x[-1] + 0.05, x[-1] + 0.14, x[-1] + 0.2], [value, y, y], color=color, linewidth=1.2,
+			        zorder=2, clip_on=False)
 			ax.text(x[-1] + 0.23, y, f"{value:.0f} {unit}", va="center", fontsize=11, color=TEXT)
 		if metric == 0:
 			ax.axhline(REAL_TIME_FPS, color=MUTED, linewidth=1.3, linestyle=(0, (4, 3)), zorder=2)
