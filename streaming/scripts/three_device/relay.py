@@ -1,4 +1,5 @@
 import argparse
+import threading
 import time
 from pathlib import Path
 
@@ -619,12 +620,33 @@ appsink.get_static_pad("sink").add_probe(Gst.PadProbeType.EVENT_DOWNSTREAM, on_a
 
 encoder.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, on_encoded_buffer)
 
-print(f"Connecting to Pi at {args.host}:{args.port}, technique={args.technique}...")
-print(f"Listening on {args.listen_host}:{args.listen_port} for the VM to connect...")
+# Wait for the VM before touching the Pi at all: pipeline2 (tcpserversink) streams in real time
+# the moment it's PLAYING, whether or not anyone is connected, so any frame relayed before the VM
+# joins would be lost. PAUSED already opens the listening socket; PLAYING starts the clock. Not
+# starting pipeline (the Pi-facing side) until then also means no decode/VFI work is wasted on
+# frames nobody downstream can receive yet.
+vm_connected = threading.Event()
+tcpserversink.connect("client-added", lambda sink, client: vm_connected.set())
 
+if pipeline2.set_state(Gst.State.PAUSED) == Gst.StateChangeReturn.FAILURE:
+	report_start_failure(pipeline2, "pipeline2")
+	exit(-1)
+
+print(f"Listening on {args.listen_host}:{args.listen_port} for the VM to connect...")
+bus2 = pipeline2.get_bus()
+while not vm_connected.wait(timeout=0.5):
+	msg = bus2.pop_filtered(Gst.MessageType.ERROR)
+	if msg is not None:
+		err, debug_info = msg.parse_error()
+		print(f"pipeline2: error from element {msg.src.get_name()}: {err.message}")
+		exit(-1)
+
+print("VM connected -- starting relay.")
 if pipeline2.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
 	report_start_failure(pipeline2, "pipeline2")
 	exit(-1)
+
+print(f"Connecting to Pi at {args.host}:{args.port}, technique={args.technique}...")
 if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
 	report_start_failure(pipeline, "pipeline")
 	exit(-1)
