@@ -1,5 +1,5 @@
-M=/usr/bin/tensorflow-lite-2.19.0/examples/benchmark_model
-BM=/usr/bin/tensorflow-lite-2.19.0/examples/mobilenet_v1_1.0_224_quant.tflite
+BM=/usr/bin/tensorflow-lite-2.19.0/examples/benchmark_model
+M=/usr/bin/tensorflow-lite-2.19.0/examples/mobilenet_v1_1.0_224_quant.tflite
 
 # Run test on CPU
 $BM --graph=$M --num_runs=50
