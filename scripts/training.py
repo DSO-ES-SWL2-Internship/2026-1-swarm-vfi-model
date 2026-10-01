@@ -1,6 +1,8 @@
 """
-Trains a U-Net VFI Model on Vimeo-90K dataset
-Exports as INT8 TFLite file for deployment on iMX8M-Plus
+Trains the toy U-Net VFI model on Vimeo-90K (--data vimeo) or synthetic moving circles,
+and saves it as artifacts/toy_unet.keras plus a sample prediction. Also holds the shared
+constants (image size, artifact paths) the other scripts import.
+INT8 export for the iMX8M Plus NPU is a separate step: export_tflite.py.
 """
 
 import argparse

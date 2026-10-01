@@ -1,5 +1,5 @@
 """
-Runs every interpolation technique (frame_hold, linear_blend, toy_unet) against a
+Runs every interpolation technique (frame_hold, linear_blend, toy_unet, toy_unet_int8) against a
 data source and writes a uniform outputs/<source>/<id>/ folder per example, for
 eval.py and visual_grid.py to consume. 
 """
