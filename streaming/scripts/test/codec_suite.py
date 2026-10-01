@@ -54,15 +54,19 @@ ENCODERS = {  # (encoder, parser needed to mux its output into MP4 for --keep-ou
 }
 
 
-def build_pipeline(video, dec, scale, enc, output_path, paced):
+def build_pipeline(video, dec, scale, enc, output_path, pace):
 	encoder, parser = ENCODERS[enc]
 	# sync=true consumes each frame at its timestamp (real-time pacing); sync=false runs flat out.
-	sync = "true" if paced else "false"
+	sync = "true" if pace else "false"
+	# The 60 fps copies' frames are exactly 1/60 s apart, but qtdemux estimates the caps' rate from the
+	# file duration and reports 60000/1001, which vpuenc_h264 rejects ("VCEncCheckCfg: Invalid
+	# frameRateNum"). capssetter only rewrites the declared rate -- no per-frame work.
+	rate = f' ! capssetter caps="video/x-h264,framerate={pace}/1"' if pace else ""
 	# Grey -> RGB -> I420 before the encoder: a direct GRAY8 -> I420 copies full-range values into a
 	# plane players read as video range. I420 is forced so vpuenc_h264 never gets RGB to convert itself.
 	sink = (f"{parser} ! mp4mux ! filesink sync={sync} location={output_path}" if output_path
 	        else f"fakesink sync={sync}")
-	return (f"filesrc location={video} ! qtdemux ! h264parse ! {DECODERS[dec]} ! {SCALERS[scale]} "
+	return (f"filesrc location={video} ! qtdemux ! h264parse{rate} ! {DECODERS[dec]} ! {SCALERS[scale]} "
 	        f"! videoconvert ! video/x-raw,format=RGBx ! videoconvert ! video/x-raw,format=I420 ! {encoder} ! {sink}")
 
 
@@ -115,8 +119,16 @@ def run_once(pipeline):
 		"cpu_user_s": after.ru_utime - before.ru_utime,
 		"cpu_sys_s": after.ru_stime - before.ru_stime,
 		"samples": samples,
-		"error": stderr.splitlines()[-1] if proc.returncode and stderr else "",
+		"error": first_error(stderr) if proc.returncode else "",
 	}
+
+
+def first_error(stderr):
+	# gst-launch's last line is often a generic follow-up ("pipeline doesn't want to preroll"); the
+	# cause is the first "ERROR: from element ..." line and the debug info printed after it.
+	lines = stderr.splitlines()
+	start = next((i for i, line in enumerate(lines) if line.startswith("ERROR")), 0)
+	return " | ".join(line.strip() for line in lines[start:start + 3])
 
 
 STARTUP_S = 1.0  # left out of the summary: plugin loading spikes the CPU at the start of every run
@@ -186,7 +198,7 @@ for repeat in range(1, args.repeats + 1):
 			n += 1
 			config = f"{dec} -> {scale} -> {enc}"
 			output = f"/tmp/suite_{res}_{dec}_{scale}_{enc}.mp4" if args.keep_output else None
-			m = run_once(build_pipeline(video, dec, scale, enc, output, bool(args.pace)))
+			m = run_once(build_pipeline(video, dec, scale, enc, output, args.pace))
 			cpu = m["cpu_user_s"] + m["cpu_sys_s"]
 			row = {"mode": mode, "resolution": res, "decoder": dec, "scaler": scale, "encoder": enc,
 			       "config": config, "repeat": repeat, "status": "ok" if m["ok"] else "failed",
