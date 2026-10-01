@@ -13,6 +13,11 @@ import vimeo_dataset
 
 REP_DATASET_SIZE = 100  # samples used to calibrate activation quantization ranges
 
+# One weight scale per layer instead of TF's default one per output channel. The i.MX8M Plus NPU is
+# optimised for per-tensor quantisation (NXP UG10166 sec 8.1.5): measured 12.25 ms vs 23.09 ms per
+# inference (1.9x faster), for -0.02 dB PSNR on 300 Vimeo eval triplets (compare_quantization.py).
+PER_TENSOR = True
+
 def main():
   convert()
   fp32_size = training.MODEL_PATH.stat().st_size
@@ -57,6 +62,7 @@ def convert():
   converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
   converter.inference_input_type = tf.int8
   converter.inference_output_type = tf.int8
+  converter._experimental_disable_per_channel = PER_TENSOR
 
   tflite_model = converter.convert()
 
