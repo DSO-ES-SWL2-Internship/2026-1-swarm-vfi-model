@@ -1,7 +1,7 @@
 # Builds tiny single-layer INT8 TFLite models mirroring the toy U-Net's layers (real shapes, full
 # 448x256 resolution), each exported per-channel (TF's default, like toy_unet_int8.tflite) and
 # per-tensor, plus the real trained U-Net exported per-tensor. Benchmarked on the board's CPU/NPU/GPU
-# (run_gpu_layer_test.sh), they show which layer type or quantisation style makes the GPU so slow
+# (benchmarks/benchmark_backends.sh), they show which layer type or quantisation style makes the GPU so slow
 # on our model (9.4 s/inference) when it handles MobileNet at CPU-like speed.
 # Usage (on the VM): python3 gpu_layer_test.py   -> artifacts/gpu_layer_test/*.tflite
 
