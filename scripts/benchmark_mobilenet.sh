@@ -8,4 +8,4 @@ $BM --graph=$M --num_runs=50
 $BM --graph=$M --num_runs=50 --external_delegate_path=/usr/lib/libvx_delegate.so
 
 # Run test on GPU
-USE_GPU_INFERENCE=1 $BM --graph=$M --num_runs==20 --external_delegate_path=/usr/lib/libvx_delegate.so
+USE_GPU_INFERENCE=1 $BM --graph=$M --num_runs=20 --external_delegate_path=/usr/lib/libvx_delegate.so
