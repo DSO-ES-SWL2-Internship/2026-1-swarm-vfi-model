@@ -2,7 +2,7 @@
 #   rows    = speed (fps) and CPU time
 #   columns = encoder (CPU MPEG-4 vs VPU H.264)
 #   lines   = the four decode -> scale combinations, against source resolution, mean +/- stdev
-# Usage: python3 plot_codec_suite.py [results.csv]   (defaults to the newest codec_suite_*.csv)
+# Usage: python3 plot_codec_suite.py [results.csv]   (defaults to the newest codec_suite_*.csv run summary)
 
 import csv
 import statistics
@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent.parent / "videos" / "benchmark"
 RESOLUTIONS = ["480p", "720p", "1080p"]
-REAL_TIME_FPS = 24
+REAL_TIME_FPS = [(24, "source: 24 fps"), (60, "stress test: 60 fps")]  # reference lines on the speed panels
 
 # Fixed colour per decode -> scale combination (same meaning in every panel and in earlier charts).
 SERIES = [
@@ -31,16 +31,19 @@ SURFACE, TEXT, MUTED, GRID = "#ffffff", "#0b0b0b", "#52514e", "#e6e5e1"
 if len(sys.argv) > 1:
 	csv_path = Path(sys.argv[1])
 else:
-	found = sorted(RESULTS_DIR.glob("codec_suite_*.csv"))
+	# Newest run summary; the per-sample *_timeseries.csv files are a different format.
+	found = sorted((p for p in RESULTS_DIR.glob("codec_suite_*.csv") if not p.stem.endswith("_timeseries")),
+	               key=lambda p: p.stat().st_mtime)
 	if not found:
 		raise SystemExit(f"no codec_suite_*.csv in {RESULTS_DIR}")
 	csv_path = found[-1]
 
 runs = defaultdict(list)  # (resolution, decoder, scaler, encoder) -> list of (fps, cpu_s)
-repeats = set()
+repeats, modes = set(), set()
 with open(csv_path) as f:
 	for r in csv.DictReader(f):
 		repeats.add(r["repeat"])
+		modes.add(r.get("mode", "flatout"))  # files from before --pace have no mode column
 		if r["status"] == "ok":
 			runs[(r["resolution"], r["decoder"], r["scaler"], r["encoder"])].append((float(r["fps"]), float(r["cpu_s"])))
 resolutions = [res for res in RESOLUTIONS if any(k[0] == res for k in runs)]
@@ -88,8 +91,9 @@ for row, (metric, ylabel, unit) in enumerate([(0, "frames per second", "fps"), (
 			        zorder=2, clip_on=False)
 			ax.text(x[-1] + 0.23, y, f"{value:.0f} {unit}", va="center", fontsize=11, color=TEXT)
 		if metric == 0:
-			ax.axhline(REAL_TIME_FPS, color=MUTED, linewidth=1.3, linestyle=(0, (4, 3)), zorder=2)
-			ax.text(-0.15, REAL_TIME_FPS + ymax * 0.015, f"real time: {REAL_TIME_FPS} fps", fontsize=10, color=MUTED)
+			for fps, label in REAL_TIME_FPS:
+				ax.axhline(fps, color=MUTED, linewidth=1.3, linestyle=(0, (4, 3)), zorder=2)
+				ax.text(-0.15, fps - ymax * 0.045, label, fontsize=10, color=MUTED)  # below the line: lines start near 60
 		ax.set_title(f"{'Speed' if metric == 0 else 'CPU time'} · {enc_label}", loc="left",
 		             fontsize=13, fontweight="bold", color=TEXT)
 		ax.set_xticks(x, resolutions)
@@ -105,7 +109,9 @@ for row, (metric, ylabel, unit) in enumerate([(0, "frames per second", "fps"), (
 
 fig.suptitle("Decode → scale to 448×256 grey → encode on the i.MX8M Plus, by source resolution",
              x=0.01, y=0.985, ha="left", fontsize=16, fontweight="bold", color=TEXT)
-fig.text(0.01, 0.945, f"Sintel trailer, 1251 frames, run flat out; mean ± stdev of {len(repeats)} runs. "
+mode = modes.pop() if len(modes) == 1 else "mixed"
+how = f"played in real time at {mode[5:]} fps" if mode.startswith("paced") else "run flat out"
+fig.text(0.01, 0.945, f"Sintel trailer, 1251 frames, {how}; mean ± stdev of {len(repeats)} runs. "
          "CPU time = user + system seconds across all cores. CPU encoder is MPEG-4 (cheaper than H.264).",
          ha="left", fontsize=10.5, color=MUTED)
 handles = [plt.Line2D([], [], color=c, linewidth=2.5, marker="o", markersize=8, markeredgecolor=SURFACE, label=l)
