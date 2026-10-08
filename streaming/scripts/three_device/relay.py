@@ -39,6 +39,72 @@ def on_pad_added(src, new_pad, parser):
 			print("Failed to link demuxer pad to parser")
 
 
+# --range lut: instead of converting through RGBx in GStreamer (two full-frame CPU conversions on the
+# way out, and two on the way in with the CPU scaler -- ~65% of the pipeline's CPU time, measured with
+# conversion_cost.py), the pipeline passes video-range grey (16-235, a plain copy of the luma plane) and
+# these tables convert the range per pixel in numpy. The model still sees full-range grey (0-255, as in
+# training); everything leaving the relay is video range, so GRAY8 -> I420 is a plain copy too.
+# FULL_TO_VIDEO matches videoconvert's GRAY8 -> RGBx -> I420 to within one grey level.
+VIDEO_TO_FULL = np.clip(np.round((np.arange(256) - 16) * 255 / 219), 0, 255).astype(np.uint8)
+FULL_TO_VIDEO = np.round(16 + np.arange(256) * 219 / 255).astype(np.uint8)
+
+
+def map_buffer(buf, table):
+	# New buffer with every pixel looked up in table; timestamps carried over.
+	ok, info = buf.map(Gst.MapFlags.READ)
+	pixels = table[np.frombuffer(info.data, dtype=np.uint8)]
+	buf.unmap(info)
+	out = Gst.Buffer.new_wrapped(pixels.tobytes())
+	out.pts, out.dts, out.duration = buf.pts, buf.dts, buf.duration
+	return out
+
+
+class RangeTimer:
+	# Total time spent in the range lookups, for the end-of-run report.
+	total = 0.0
+	frames = 0
+
+	@classmethod
+	def run(cls, buf, table):
+		start = time.perf_counter()
+		out = map_buffer(buf, table)
+		cls.total += time.perf_counter() - start
+		cls.frames += 1
+		return out
+
+
+class FullRangeSink:
+	# Stands in for appsink when the scaler outputs video-range grey: the technique pulls samples as
+	# usual and gets frames already expanded to full range. Techniques only call
+	# pull_sample().get_buffer(), so that is all this provides.
+	class Sample:
+		def __init__(self, buffer):
+			self.buffer = buffer
+
+		def get_buffer(self):
+			return self.buffer
+
+	def __init__(self, sink):
+		self.sink = sink
+
+	def pull_sample(self):
+		sample = self.sink.pull_sample()
+		return self.Sample(RangeTimer.run(sample.get_buffer(), VIDEO_TO_FULL)) if sample else sample
+
+
+class VideoRangeAppsrc:
+	# Stands in for appsrc: compresses every outgoing frame (interpolated and original alike) to video
+	# range before pushing it, so the output converter can copy GRAY8 straight into I420.
+	def __init__(self, appsrc):
+		self.appsrc = appsrc
+
+	def push_buffer(self, buf):
+		return self.appsrc.push_buffer(RangeTimer.run(buf, FULL_TO_VIDEO))
+
+	def __getattr__(self, name):  # end_of_stream() and anything else go to the real appsrc
+		return getattr(self.appsrc, name)
+
+
 class Passthrough:
 	FPS_MULTIPLIER = 1  # forwards frames 1:1; every other technique doubles them
 
@@ -379,28 +445,40 @@ SCALERS = {
 }
 
 
-def make_scaler(choice, decoder):
+# --range lut variants: the CPU chain copies the video-range luma plane straight to GRAY8 (expanded later
+# by VIDEO_TO_FULL); G2D only outputs RGB, so its chain is unchanged and already full range.
+SCALERS_LUT = dict(SCALERS, cpu="videoscale ! video/x-raw,width=448,height=256 ! videoconvert ! capsfilter caps=video/x-raw,format=GRAY8")
+
+
+def with_threads(description, threads):
+	# videoconvert splits each frame across this many threads (n-threads; default 1).
+	return description.replace("videoconvert", f"videoconvert n-threads={threads}") if threads > 1 else description
+
+
+def make_scaler(choice, decoder, lut=False, threads=1):
 	if choice == "auto":
 		# vpudec -> CPU scaling is slow and mis-sizes frames (the VPU pads them); G2D handles both.
 		from_vpu = decoder is not None and decoder.get_factory().get_name() == "vpudec"
 		choice = "g2d" if from_vpu and Gst.ElementFactory.find("imxvideoconvert_g2d") else "cpu"
 	try:
-		scaler = Gst.parse_bin_from_description(SCALERS[choice], True)
+		scaler = Gst.parse_bin_from_description(with_threads((SCALERS_LUT if lut else SCALERS)[choice], threads), True)
 	except GLib.Error as err:
 		print(f"Failed to create scaler ({choice}): {err.message}")
-		return None
+		return None, choice
 	scaler.set_name("scaler")
 	print(f"Scaler: {choice}")
-	return scaler
+	return scaler, choice
 
 
 # GRAY8 -> encoder input via RGB: a direct GRAY8 -> I420 copies 0-255 into the luma plane, which
 # players read as video range (16-235), crushing shadows and highlights. Through RGB it is mapped
 # back properly. I420 is forced so encoders that also accept RGB (vpuenc_h264) never convert it
 # themselves with their own, unverified range handling.
-def make_output_converter():
-	converter = Gst.parse_bin_from_description(
-		"videoconvert ! video/x-raw,format=RGBx ! videoconvert ! capsfilter caps=video/x-raw,format=I420", True)
+# With --range lut the frames are already video range, so GRAY8 -> I420 is a plain copy of the luma plane.
+def make_output_converter(lut=False, threads=1):
+	description = ("videoconvert ! capsfilter caps=video/x-raw,format=I420" if lut else
+	               "videoconvert ! video/x-raw,format=RGBx ! videoconvert ! capsfilter caps=video/x-raw,format=I420")
+	converter = Gst.parse_bin_from_description(with_threads(description, threads), True)
 	converter.set_name("convert2")
 	return converter
 
@@ -460,7 +538,13 @@ parser_args.add_argument("--scaler", choices=["auto", "cpu", "g2d"], default="au
                           help="scale/greyscale on: auto = g2d when decoding on the VPU, else cpu")
 parser_args.add_argument("--encoder", choices=["auto", "vpu", "x264", "mpeg4"], default="auto",
                           help="re-encode codec: auto = vpu (hardware) if installed, else x264, else mpeg4")
+parser_args.add_argument("--range", choices=["rgb", "lut"], default="rgb",
+                          help="how grey frames are kept in the model's full range (0-255): rgb = convert through "
+                               "RGBx in GStreamer (original); lut = numpy lookup tables in the relay, no RGBx steps")
+parser_args.add_argument("--convert-threads", type=int, default=1,
+                          help="threads per videoconvert (n-threads); 1 = GStreamer's default")
 args = parser_args.parse_args()
+print(f"Range handling: {args.range}, videoconvert threads: {args.convert_threads}")
 
 # Arm A: receive (from Pi) -> demux (TS) -> decode -> downscale -> VFI technique -> appsink.
 # Identical to two_device/receiver.py's arm A -- same reasoning applies (see that file's comments
@@ -469,7 +553,7 @@ tcpclientsrc = make_element("tcpclientsrc", "tcpclientsrc")
 demuxer = make_element("tsdemux", "demuxer")
 parser = make_element("h264parse", "parser")
 decoder = make_decoder(args.decoder)
-scaler = make_scaler(args.scaler, decoder)
+scaler, scaler_choice = make_scaler(args.scaler, decoder, args.range == "lut", args.convert_threads)
 appsink = make_element("appsink", "appsink")
 
 # Arm B: appsrc -> queue -> convert -> encoder -> muxer -> tcpserversink. Unlike
@@ -482,8 +566,8 @@ appsink = make_element("appsink", "appsink")
 # thread), and queue decouples that from the thread actually encoding/sending downstream.
 appsrc = make_element("appsrc", "appsrc")
 queue = make_element("queue", "queue")
-convert2 = make_output_converter()
-# GRAY8 -> RGB -> I420 happens in convert2 above (no encoder takes GRAY8; see make_output_converter).
+convert2 = make_output_converter(args.range == "lut", args.convert_threads)
+# GRAY8 -> I420 happens in convert2 above, via RGBx or as a plain copy with --range lut (see make_output_converter).
 encoder = make_encoder(args.encoder)
 muxer = make_element("mpegtsmux", "muxer")
 tcpserversink = make_element("tcpserversink", "tcpserversink")
@@ -588,8 +672,13 @@ def on_appsink_eos(sink):
 	technique.on_eos(sink)
 
 
-technique = TECHNIQUES[args.technique](appsrc)
-appsink.connect("new-sample", track_activity(technique.on_new_sample))
+lut = args.range == "lut"
+technique = TECHNIQUES[args.technique](VideoRangeAppsrc(appsrc) if lut else appsrc)
+# Only the CPU scaler hands over video-range grey in lut mode; G2D's output is already full range.
+if lut and scaler_choice == "cpu":
+	appsink.connect("new-sample", track_activity(lambda sink: technique.on_new_sample(FullRangeSink(sink))))
+else:
+	appsink.connect("new-sample", track_activity(technique.on_new_sample))
 # appsink delivers its first frame twice: once as the preroll sample, then again as the first
 # regular sample. Handling both pushed frame 0 twice -- shifting the output one frame behind the
 # source and starting the stream with duplicate timestamps (PTS 0, and a fake "interpolated"
@@ -687,5 +776,8 @@ else:
 if getattr(technique, "infer_calls", 0) > 0:
 	mean_ms = technique.total_infer_time / technique.infer_calls * 1000
 	print(f"Mean inference latency ({technique.infer_calls} calls, technique={args.technique}): {mean_ms:.2f} ms/frame")
+
+if RangeTimer.frames:
+	print(f"Mean range lookup: {RangeTimer.total / RangeTimer.frames * 1000:.2f} ms/frame ({RangeTimer.frames} frames)")
 
 print("Relay finished.")
