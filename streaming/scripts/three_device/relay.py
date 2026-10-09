@@ -648,6 +648,11 @@ last_frame_time = time.time()
 # Python-level scheduling latency. The gap between them is the throughput measure for this hop.
 first_relay_time = None
 last_relay_time = None
+# Process CPU time (all threads, user + system) at the same two moments, so the CPU cost covers only
+# the frames flowing -- not start-up, model loading or the NPU warm-up. The live stream is paced by
+# the Pi, so options that save CPU show up here rather than in the frame rate.
+first_relay_cpu = None
+last_relay_cpu = None
 
 # Plain progress counters (no logging, just visibility) -- arrived tracks receiving from the
 # Pi, relayed tracks post-VFI output sent onward to the VM, which is the stage most likely to
@@ -668,11 +673,14 @@ def track_activity(handler):
 
 
 def on_encoded_buffer(pad, info):
-	global first_relay_time, last_relay_time, relayed_count
+	global first_relay_time, last_relay_time, first_relay_cpu, last_relay_cpu, relayed_count
 	now = time.time()
+	cpu = time.process_time()
 	if first_relay_time is None:
 		first_relay_time = now
+		first_relay_cpu = cpu
 	last_relay_time = now
+	last_relay_cpu = cpu
 	relayed_count += 1
 	if relayed_count == 1 or relayed_count % 120 == 0:
 		print(f"[relayed: {relayed_count}]")
@@ -788,7 +796,14 @@ pipeline.set_state(Gst.State.NULL)
 pipeline2.set_state(Gst.State.NULL)
 
 if first_relay_time is not None:
-	print(f"Time from first to last frame relayed: {last_relay_time - first_relay_time:.3f}s")
+	wall_s = last_relay_time - first_relay_time
+	cpu_s = last_relay_cpu - first_relay_cpu
+	print(f"Time from first to last frame relayed: {wall_s:.3f}s")
+	# 100% = one core fully busy (the board has 4). Excludes work in kernel threads and drivers
+	# outside this process (VPU/G2D/NPU hardware time is not CPU time at all).
+	if wall_s > 0 and relayed_count > 1:
+		print(f"Relay CPU time: {cpu_s:.2f}s = {cpu_s / wall_s * 100:.0f}% of one core, "
+		      f"{cpu_s / (relayed_count - 1) * 1000:.2f} ms per relayed frame")
 else:
 	print("No frames were relayed.")
 
