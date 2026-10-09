@@ -372,13 +372,25 @@ def make_decoder(choice):
 	return decoder
 
 
-# Scales to the model's 448x256 greyscale input. Going through RGB yields full-range grey (0-255),
-# matching how the training data was made (PIL convert("L")); YUV -> GRAY8 directly just copies the
-# video-range (16-235) luma plane, i.e. lower-contrast input than the model was trained on. The G2D
-# chain's GRAY8 colorimetry was chosen by measurement: it is the setting whose output matches training.
+# Decode path, in two stages: the scaler changes the resolution to the model's 448x256 input, then the
+# input converter changes the colour format to the GRAY8 the model takes. The encode path keeps the
+# resolution, so it only has an output converter (make_output_converter).
+#
+# G2D's output formats are RGB only, so on the G2D chain the scaler also does the YUV -> RGB step; the
+# CPU's videoscale leaves the format alone and its input converter does that step itself.
 SCALERS = {
-	"cpu": "videoscale ! video/x-raw,width=448,height=256 ! videoconvert ! video/x-raw,format=RGBx ! videoconvert ! capsfilter caps=video/x-raw,format=GRAY8",
-	"g2d": "imxvideoconvert_g2d ! video/x-raw,width=448,height=256 ! videoconvert ! capsfilter caps=\"video/x-raw,format=GRAY8,colorimetry=2:4:0:0\"",
+	"cpu": "videoscale ! capsfilter caps=video/x-raw,width=448,height=256",
+	"g2d": "imxvideoconvert_g2d ! capsfilter caps=video/x-raw,width=448,height=256",
+}
+
+# Grey for the model goes through RGB, which yields full-range grey (0-255), matching how the training
+# data was made (PIL convert("L")); YUV -> GRAY8 directly just copies the video-range (16-235) luma
+# plane, i.e. lower-contrast input than the model was trained on. The G2D chain arrives as RGB already,
+# so it only needs RGB -> GRAY8; its GRAY8 colorimetry was chosen by measurement: it is the setting
+# whose output matches training.
+INPUT_CONVERTERS = {
+	"cpu": "videoconvert ! video/x-raw,format=RGBx ! videoconvert ! capsfilter caps=video/x-raw,format=GRAY8",
+	"g2d": "videoconvert ! capsfilter caps=\"video/x-raw,format=GRAY8,colorimetry=2:4:0:0\"",
 }
 
 
@@ -391,10 +403,17 @@ def make_scaler(choice, decoder):
 		scaler = Gst.parse_bin_from_description(SCALERS[choice], True)
 	except GLib.Error as err:
 		print(f"Failed to create scaler ({choice}): {err.message}")
-		return None
+		return None, choice
 	scaler.set_name("scaler")
 	print(f"Scaler: {choice}")
-	return scaler
+	return scaler, choice
+
+
+# Matched to the scaler: the format the scaler hands over decides what is left to convert.
+def make_input_converter(scaler_choice):
+	converter = Gst.parse_bin_from_description(INPUT_CONVERTERS[scaler_choice], True)
+	converter.set_name("input_converter")
+	return converter
 
 
 # GRAY8 -> encoder input via RGB: a direct GRAY8 -> I420 copies 0-255 into the luma plane, which
@@ -404,7 +423,7 @@ def make_scaler(choice, decoder):
 def make_output_converter():
 	converter = Gst.parse_bin_from_description(
 		"videoconvert ! video/x-raw,format=RGBx ! videoconvert ! capsfilter caps=video/x-raw,format=I420", True)
-	converter.set_name("convert2")
+	converter.set_name("output_converter")
 	return converter
 
 
@@ -462,15 +481,16 @@ parser_args.add_argument("--encoder", choices=["auto", "vpu", "x264", "mpeg4"], 
 args = parser_args.parse_args()
 output_path = args.output or str(VIDEOS_DIR / f"received_{args.technique}.mp4")
 
-# Arm A: receive -> demux (TS) -> decode -> downscale -> VFI technique -> appsink
+# Arm A: receive -> demux (TS) -> decode -> scale -> convert to grey -> VFI technique -> appsink
 tcpclientsrc = make_element("tcpclientsrc", "tcpclientsrc")
 demuxer = make_element("tsdemux", "demuxer")
 parser = make_element("h264parse", "parser")
 decoder = make_decoder(args.decoder)
-scaler = make_scaler(args.scaler, decoder)
+scaler, scaler_choice = make_scaler(args.scaler, decoder)
+input_converter = make_input_converter(scaler_choice)
 appsink = make_element("appsink", "appsink")
 
-# Arm B: appsrc -> queue -> convert -> encoder -> muxer -> filesink. Writes a real, seekable
+# Arm B: appsrc -> queue -> output converter -> encoder -> muxer -> filesink. Writes a real, seekable
 # video file rather than driving a live display -- lets specific ranges be replayed later for
 # comparison, and is what the first-frame/last-frame throughput measurement below needs.
 # sync=False on the filesink (set further down) means frames get written as fast as the
@@ -486,8 +506,8 @@ appsink = make_element("appsink", "appsink")
 # practice regardless of what's downstream.
 appsrc = make_element("appsrc", "appsrc")
 queue = make_element("queue", "queue")
-convert2 = make_output_converter()
-# GRAY8 -> RGB -> I420 happens in convert2 above (no encoder takes GRAY8; see make_output_converter).
+output_converter = make_output_converter()
+# GRAY8 -> RGB -> I420 happens in output_converter above (no encoder takes GRAY8; see make_output_converter).
 encoder = make_encoder(args.encoder)
 muxer = make_element("mp4mux", "muxer")
 filesink = make_element("filesink", "filesink")
@@ -495,15 +515,15 @@ filesink = make_element("filesink", "filesink")
 pipeline = Gst.Pipeline.new("receiver-pipeline")
 pipeline2 = Gst.Pipeline.new("receiver-pipeline-2")
 
-elements = [tcpclientsrc, demuxer, parser, decoder, scaler, appsink,
-            appsrc, queue, convert2, encoder, muxer, filesink]
+elements = [tcpclientsrc, demuxer, parser, decoder, scaler, input_converter, appsink,
+            appsrc, queue, output_converter, encoder, muxer, filesink]
 if not pipeline or not pipeline2 or not all(elements):
 	print("Failed to create pipeline or one of its elements")
 	exit(-1)
 
-for el in [tcpclientsrc, demuxer, parser, decoder, scaler, appsink]:
+for el in [tcpclientsrc, demuxer, parser, decoder, scaler, input_converter, appsink]:
 	pipeline.add(el)
-for el in [appsrc, queue, convert2, encoder, muxer, filesink]:
+for el in [appsrc, queue, output_converter, encoder, muxer, filesink]:
 	pipeline2.add(el)
 
 # demuxer's src pad is dynamic (only appears once tsdemux has parsed the TS
@@ -514,11 +534,11 @@ if not tcpclientsrc.link(demuxer):
 	print("tcpclientsrc could not be linked to demuxer")
 	exit(-1)
 
-if not link_many(parser, decoder, scaler, appsink):
+if not link_many(parser, decoder, scaler, input_converter, appsink):
 	print("Elements from parser to appsink could not be linked")
 	exit(-1)
 
-if not link_many(appsrc, queue, convert2, encoder, muxer, filesink):
+if not link_many(appsrc, queue, output_converter, encoder, muxer, filesink):
 	print("Elements from appsrc to filesink could not be linked")
 	exit(-1)
 
