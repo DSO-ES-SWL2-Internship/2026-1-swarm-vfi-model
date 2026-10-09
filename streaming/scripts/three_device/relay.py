@@ -40,7 +40,7 @@ def on_pad_added(src, new_pad, parser):
 
 
 # --range lut: instead of converting through RGBx in GStreamer (two full-frame CPU conversions on the
-# way out, and two on the way in with the CPU scaler -- ~65% of the pipeline's CPU time, measured with
+# way out, and two on the way in with the CPU input converter -- ~65% of the pipeline's CPU time, measured with
 # conversion_cost.py), the pipeline passes video-range grey (16-235, a plain copy of the luma plane) and
 # these tables convert the range per pixel in numpy. The model still sees full-range grey (0-255, as in
 # training); everything leaving the relay is video range, so GRAY8 -> I420 is a plain copy too.
@@ -74,7 +74,7 @@ class RangeTimer:
 
 
 class FullRangeSink:
-	# Stands in for appsink when the scaler outputs video-range grey: the technique pulls samples as
+	# Stands in for appsink when the input converter outputs video-range grey: the technique pulls samples as
 	# usual and gets frames already expanded to full range. Techniques only call
 	# pull_sample().get_buffer(), so that is all this provides.
 	class Sample:
@@ -435,19 +435,31 @@ def make_decoder(choice):
 	return decoder
 
 
-# Scales to the model's 448x256 greyscale input. Going through RGB yields full-range grey (0-255),
-# matching how the training data was made (PIL convert("L")); YUV -> GRAY8 directly just copies the
-# video-range (16-235) luma plane, i.e. lower-contrast input than the model was trained on. The G2D
-# chain's GRAY8 colorimetry was chosen by measurement: it is the setting whose output matches training.
+# Decode path, in two stages: the scaler changes the resolution to the model's 448x256 input, then the
+# input converter changes the colour format to the GRAY8 the model takes. The encode path keeps the
+# resolution, so it only has an output converter (make_output_converter).
+#
+# G2D's output formats are RGB only, so on the G2D chain the scaler also does the YUV -> RGB step; the
+# CPU's videoscale leaves the format alone and its input converter does that step itself.
 SCALERS = {
-	"cpu": "videoscale ! video/x-raw,width=448,height=256 ! videoconvert ! video/x-raw,format=RGBx ! videoconvert ! capsfilter caps=video/x-raw,format=GRAY8",
-	"g2d": "imxvideoconvert_g2d ! video/x-raw,width=448,height=256 ! videoconvert ! capsfilter caps=\"video/x-raw,format=GRAY8,colorimetry=2:4:0:0\"",
+	"cpu": "videoscale ! capsfilter caps=video/x-raw,width=448,height=256",
+	"g2d": "imxvideoconvert_g2d ! capsfilter caps=video/x-raw,width=448,height=256",
 }
 
+# Grey for the model goes through RGB, which yields full-range grey (0-255), matching how the training
+# data was made (PIL convert("L")); YUV -> GRAY8 directly just copies the video-range (16-235) luma
+# plane, i.e. lower-contrast input than the model was trained on. The G2D chain arrives as RGB already,
+# so it only needs RGB -> GRAY8; its GRAY8 colorimetry was chosen by measurement: it is the setting
+# whose output matches training.
+INPUT_CONVERTERS = {
+	"cpu": "videoconvert ! video/x-raw,format=RGBx ! videoconvert ! capsfilter caps=video/x-raw,format=GRAY8",
+	"g2d": "videoconvert ! capsfilter caps=\"video/x-raw,format=GRAY8,colorimetry=2:4:0:0\"",
+}
 
-# --range lut variants: the CPU chain copies the video-range luma plane straight to GRAY8 (expanded later
-# by VIDEO_TO_FULL); G2D only outputs RGB, so its chain is unchanged and already full range.
-SCALERS_LUT = dict(SCALERS, cpu="videoscale ! video/x-raw,width=448,height=256 ! videoconvert ! capsfilter caps=video/x-raw,format=GRAY8")
+# --range lut variant: the CPU input converter copies the video-range luma plane straight to GRAY8
+# (expanded to full range later by VIDEO_TO_FULL). The G2D chain is unchanged: it is RGB, and so
+# already full range, by the time it reaches its input converter.
+INPUT_CONVERTERS_LUT = dict(INPUT_CONVERTERS, cpu="videoconvert ! capsfilter caps=video/x-raw,format=GRAY8")
 
 
 def with_threads(description, threads):
@@ -455,19 +467,27 @@ def with_threads(description, threads):
 	return description.replace("videoconvert", f"videoconvert n-threads={threads}") if threads > 1 else description
 
 
-def make_scaler(choice, decoder, lut=False, threads=1):
+def make_scaler(choice, decoder):
 	if choice == "auto":
 		# vpudec -> CPU scaling is slow and mis-sizes frames (the VPU pads them); G2D handles both.
 		from_vpu = decoder is not None and decoder.get_factory().get_name() == "vpudec"
 		choice = "g2d" if from_vpu and Gst.ElementFactory.find("imxvideoconvert_g2d") else "cpu"
 	try:
-		scaler = Gst.parse_bin_from_description(with_threads((SCALERS_LUT if lut else SCALERS)[choice], threads), True)
+		scaler = Gst.parse_bin_from_description(SCALERS[choice], True)
 	except GLib.Error as err:
 		print(f"Failed to create scaler ({choice}): {err.message}")
 		return None, choice
 	scaler.set_name("scaler")
 	print(f"Scaler: {choice}")
 	return scaler, choice
+
+
+# Matched to the scaler: the format the scaler hands over decides what is left to convert.
+def make_input_converter(scaler_choice, lut=False, threads=1):
+	description = (INPUT_CONVERTERS_LUT if lut else INPUT_CONVERTERS)[scaler_choice]
+	converter = Gst.parse_bin_from_description(with_threads(description, threads), True)
+	converter.set_name("input_converter")
+	return converter
 
 
 # GRAY8 -> encoder input via RGB: a direct GRAY8 -> I420 copies 0-255 into the luma plane, which
@@ -479,7 +499,7 @@ def make_output_converter(lut=False, threads=1):
 	description = ("videoconvert ! capsfilter caps=video/x-raw,format=I420" if lut else
 	               "videoconvert ! video/x-raw,format=RGBx ! videoconvert ! capsfilter caps=video/x-raw,format=I420")
 	converter = Gst.parse_bin_from_description(with_threads(description, threads), True)
-	converter.set_name("convert2")
+	converter.set_name("output_converter")
 	return converter
 
 
@@ -546,17 +566,18 @@ parser_args.add_argument("--convert-threads", type=int, default=1,
 args = parser_args.parse_args()
 print(f"Range handling: {args.range}, videoconvert threads: {args.convert_threads}")
 
-# Arm A: receive (from Pi) -> demux (TS) -> decode -> downscale -> VFI technique -> appsink.
+# Arm A: receive (from Pi) -> demux (TS) -> decode -> scale -> convert to grey -> VFI technique -> appsink.
 # Identical to two_device/receiver.py's arm A -- same reasoning applies (see that file's comments
 # for the dynamic-pad-linking pattern).
 tcpclientsrc = make_element("tcpclientsrc", "tcpclientsrc")
 demuxer = make_element("tsdemux", "demuxer")
 parser = make_element("h264parse", "parser")
 decoder = make_decoder(args.decoder)
-scaler, scaler_choice = make_scaler(args.scaler, decoder, args.range == "lut", args.convert_threads)
+scaler, scaler_choice = make_scaler(args.scaler, decoder)
+input_converter = make_input_converter(scaler_choice, args.range == "lut", args.convert_threads)
 appsink = make_element("appsink", "appsink")
 
-# Arm B: appsrc -> queue -> convert -> encoder -> muxer -> tcpserversink. Unlike
+# Arm B: appsrc -> queue -> output converter -> encoder -> muxer -> tcpserversink. Unlike
 # two_device/receiver.py's arm B, this sends the VFI'd result onward to the VM over the network
 # instead of writing it to a local file -- mpegtsmux (not mp4mux), matching sender.py's own
 # choice of a streaming-friendly container over a file-container format.
@@ -566,8 +587,8 @@ appsink = make_element("appsink", "appsink")
 # thread), and queue decouples that from the thread actually encoding/sending downstream.
 appsrc = make_element("appsrc", "appsrc")
 queue = make_element("queue", "queue")
-convert2 = make_output_converter(args.range == "lut", args.convert_threads)
-# GRAY8 -> I420 happens in convert2 above, via RGBx or as a plain copy with --range lut (see make_output_converter).
+output_converter = make_output_converter(args.range == "lut", args.convert_threads)
+# GRAY8 -> I420 happens in output_converter above, via RGBx or as a plain copy with --range lut (see make_output_converter).
 encoder = make_encoder(args.encoder)
 muxer = make_element("mpegtsmux", "muxer")
 tcpserversink = make_element("tcpserversink", "tcpserversink")
@@ -575,15 +596,15 @@ tcpserversink = make_element("tcpserversink", "tcpserversink")
 pipeline = Gst.Pipeline.new("relay-pipeline")
 pipeline2 = Gst.Pipeline.new("relay-pipeline-2")
 
-elements = [tcpclientsrc, demuxer, parser, decoder, scaler, appsink,
-            appsrc, queue, convert2, encoder, muxer, tcpserversink]
+elements = [tcpclientsrc, demuxer, parser, decoder, scaler, input_converter, appsink,
+            appsrc, queue, output_converter, encoder, muxer, tcpserversink]
 if not pipeline or not pipeline2 or not all(elements):
 	print("Failed to create pipeline or one of its elements")
 	exit(-1)
 
-for el in [tcpclientsrc, demuxer, parser, decoder, scaler, appsink]:
+for el in [tcpclientsrc, demuxer, parser, decoder, scaler, input_converter, appsink]:
 	pipeline.add(el)
-for el in [appsrc, queue, convert2, encoder, muxer, tcpserversink]:
+for el in [appsrc, queue, output_converter, encoder, muxer, tcpserversink]:
 	pipeline2.add(el)
 
 # demuxer's src pad is dynamic (only appears once tsdemux has parsed the TS stream header), so
@@ -593,11 +614,11 @@ if not tcpclientsrc.link(demuxer):
 	print("tcpclientsrc could not be linked to demuxer")
 	exit(-1)
 
-if not link_many(parser, decoder, scaler, appsink):
+if not link_many(parser, decoder, scaler, input_converter, appsink):
 	print("Elements from parser to appsink could not be linked")
 	exit(-1)
 
-if not link_many(appsrc, queue, convert2, encoder, muxer, tcpserversink):
+if not link_many(appsrc, queue, output_converter, encoder, muxer, tcpserversink):
 	print("Elements from appsrc to tcpserversink could not be linked")
 	exit(-1)
 
@@ -674,7 +695,7 @@ def on_appsink_eos(sink):
 
 lut = args.range == "lut"
 technique = TECHNIQUES[args.technique](VideoRangeAppsrc(appsrc) if lut else appsrc)
-# Only the CPU scaler hands over video-range grey in lut mode; G2D's output is already full range.
+# Only the CPU input converter hands over video-range grey in lut mode; G2D's is already full range.
 if lut and scaler_choice == "cpu":
 	appsink.connect("new-sample", track_activity(lambda sink: technique.on_new_sample(FullRangeSink(sink))))
 else:
