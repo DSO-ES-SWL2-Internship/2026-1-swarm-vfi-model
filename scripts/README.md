@@ -32,6 +32,7 @@ model or its export settings change.
 | Script | Runs on | What it does |
 | --- | --- | --- |
 | `gpu_layer_test.py` | VM | Builds single-layer INT8 models (per-channel and per-tensor) to find which layer makes the GPU slow -> `artifacts/gpu_layer_test/` |
+| `export_float_variants.py` | VM | FP32 and FP16 exports of the U-Net and its transposed convolution, to test whether the GPU runs float faster than INT8 -> `artifacts/float_variants/` |
 | `benchmarks/plot_gpu_layers.py <results.txt> <out.png>` | VM | Plots the single-layer CPU/NPU/GPU times from `benchmark_backends.sh`, grouped by unit, per-channel vs per-tensor |
 | `benchmarks/benchmark_backends.sh [model.tflite ...]` | iMX8 | CPU vs NPU vs GPU average inference time for any TFLite models (default: the deployed U-Net) -> `outputs/benchmarks/` |
 
