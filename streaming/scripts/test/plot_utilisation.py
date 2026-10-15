@@ -1,6 +1,6 @@
 # Plots the resource-utilisation side of a codec_suite.py run (run on the VM -- needs matplotlib):
-#   <run>_utilisation.png  3x2 grid, columns = encoder, lines = decode -> scale combination:
-#                          lag behind real time (paced runs only), CPU % of all 4 cores, and busiest-core %
+#   <run>_lag.png          (paced runs only) lag behind real time; columns = encoder, lines = decode -> scale
+#   <run>_utilisation.png  2x2 grid, same columns and lines: CPU % of all 4 cores, and busiest-core %
 #   <run>_cores.png        per-core heat strips over time for four configs at one resolution: shows the
 #                          work sitting on one core at a time (a single busy thread), which per-core
 #                          means hide because Linux moves the thread between cores
@@ -101,51 +101,57 @@ def spread(values, gap):
 	return placed
 
 
-# --- Figure 1: lag, all-core CPU %, busiest-core % ---------------------------------------------
-metrics = ([("lag", "Lag behind real time", "seconds late (20.9 s video)", "s")] if paced else []) + [
-	("cpu_all", "CPU, all 4 cores", "% of all 4 cores busy", "%"),
-	("cpu_top", "Busiest core", "% busy (most loaded core)", "%"),
-]
-fig, axes = plt.subplots(len(metrics), 2, figsize=(14, 4.4 * len(metrics) + 1.2), facecolor=SURFACE,
-                         sharey="row", squeeze=False)
-for row, (metric, title, ylabel, unit) in enumerate(metrics):
-	ymax = 108 if unit == "%" else max(m[metric] for v in runs.values() for m in v) * 1.15
-	for col, (enc, enc_label) in enumerate(ENCODERS):
-		ax = axes[row][col]
-		ends, colors = [], []
-		for dec, scale, _, color in SERIES:
-			config = f"{dec} -> {scale} -> {enc}"
-			means = [statistics.mean(m[metric] for m in runs[(res, config)]) if runs.get((res, config)) else float("nan")
-			         for res in resolutions]
-			ax.plot(x, means, color=color, linewidth=2.5, marker="o", markersize=8, markeredgecolor=SURFACE,
-			        markeredgewidth=1.5, zorder=3)
-			ends.append(means[-1]); colors.append(color)
-		for y, value, color in zip(spread(ends, ymax * 0.07), ends, colors):
-			ax.plot([x[-1] + 0.05, x[-1] + 0.14, x[-1] + 0.2], [value, y, y], color=color, linewidth=1.2,
-			        zorder=2, clip_on=False)
-			ax.text(x[-1] + 0.23, y, f"{value:.0f}{'' if unit == '%' else ' '}{unit}", va="center", fontsize=11, color=TEXT)
-		if metric == "cpu_all":
-			ax.axhline(25, color=MUTED, linewidth=1.3, linestyle=(0, (4, 3)), zorder=2)
-			ax.text(x[-1] + 0.23, 25 + 108 * 0.07, "25% = one\ncore's worth", va="bottom", fontsize=10, color=MUTED)
-		style(ax, f"{title} · {enc_label}", ylabel, ymax, col == 0)
+# --- Figures 1 and 2: lag (paced runs only), then all-core CPU % and busiest-core % -----------------
+def plot_metrics(metrics, title, note, suffix):
+	fig, axes = plt.subplots(len(metrics), 2, figsize=(14, 4.4 * len(metrics) + 1.5), facecolor=SURFACE,
+	                         sharey="row", squeeze=False)
+	for row, (metric, metric_title, ylabel, unit) in enumerate(metrics):
+		ymax = 108 if unit == "%" else max(m[metric] for v in runs.values() for m in v) * 1.15
+		for col, (enc, enc_label) in enumerate(ENCODERS):
+			ax = axes[row][col]
+			ends, colors = [], []
+			for dec, scale, _, color in SERIES:
+				config = f"{dec} -> {scale} -> {enc}"
+				means = [statistics.mean(m[metric] for m in runs[(res, config)]) if runs.get((res, config)) else float("nan")
+				         for res in resolutions]
+				ax.plot(x, means, color=color, linewidth=2.5, marker="o", markersize=8, markeredgecolor=SURFACE,
+				        markeredgewidth=1.5, zorder=3)
+				ends.append(means[-1]); colors.append(color)
+			for y, value, color in zip(spread(ends, ymax * 0.07), ends, colors):
+				ax.plot([x[-1] + 0.05, x[-1] + 0.14, x[-1] + 0.2], [value, y, y], color=color, linewidth=1.2,
+				        zorder=2, clip_on=False)
+				ax.text(x[-1] + 0.23, y, f"{value:.0f}{'' if unit == '%' else ' '}{unit}", va="center", fontsize=11, color=TEXT)
+			if metric == "cpu_all":
+				ax.axhline(25, color=MUTED, linewidth=1.3, linestyle=(0, (4, 3)), zorder=2)
+				ax.text(x[-1] + 0.23, 25 + 108 * 0.07, "25% = one\ncore's worth", va="bottom", fontsize=10, color=MUTED)
+			style(ax, f"{metric_title} · {enc_label}", ylabel, ymax, col == 0)
+
+	fig.suptitle(title, x=0.01, y=0.99, ha="left", fontsize=16, fontweight="bold", color=TEXT)
+	fig.text(0.01, 1 - 0.95 / fig.get_figheight(), note, ha="left", fontsize=10.5, color=MUTED)
+	handles = [plt.Line2D([], [], color=c, linewidth=2.5, marker="o", markersize=8, markeredgecolor=SURFACE, label=l)
+	           for _, _, l, c in SERIES]
+	fig.legend(handles=handles, loc="lower center", ncol=4, frameon=False, fontsize=11.5, labelcolor=TEXT)
+	fig.subplots_adjust(left=0.07, right=0.94, top=1 - 1.45 / fig.get_figheight(), bottom=0.9 / fig.get_figheight(),
+	                    hspace=0.38, wspace=0.18)
+	out = csv_path.with_name(csv_path.stem + suffix)
+	fig.savefig(out, dpi=200, facecolor=SURFACE)
+	print(f"Saved {out}")
+
 
 how = f"played in real time at {mode[5:]} fps" if paced else "run flat out"
-fig.suptitle("Where the CPU time goes: whole board vs busiest core", x=0.01, y=0.99, ha="left",
-             fontsize=16, fontweight="bold", color=TEXT)
-fig.text(0.01, 1 - 0.95 / fig.get_figheight(), 
-         f"Sintel trailer, 1251 frames, {how}; mean of {repeats} runs. CPU sampled every 0.1 s from /proc/stat, first 1 s excluded.\n"
-         "Busiest core = the most loaded core in each sample. Low all-core % with one core near 100% = a single thread is the bottleneck.",
-         ha="left", fontsize=10.5, color=MUTED)
-handles = [plt.Line2D([], [], color=c, linewidth=2.5, marker="o", markersize=8, markeredgecolor=SURFACE, label=l)
-           for _, _, l, c in SERIES]
-fig.legend(handles=handles, loc="lower center", ncol=4, frameon=False, fontsize=11.5, labelcolor=TEXT)
-fig.subplots_adjust(left=0.07, right=0.94, top=1 - 1.45 / fig.get_figheight(), bottom=0.6 / fig.get_figheight() + 0.03,
-                    hspace=0.38, wspace=0.18)
-out1 = csv_path.with_name(csv_path.stem + "_utilisation.png")
-fig.savefig(out1, dpi=200, facecolor=SURFACE)
-print(f"Saved {out1}")
+if paced:
+	plot_metrics([("lag", "Lag behind real time", "seconds late (20.9 s video)", "s")],
+	             f"How far each configuration falls behind real time at {mode[5:]} fps",
+	             f"Sintel trailer, 1251 frames, {how}; mean of {repeats} runs. 0 s = kept up with the source.",
+	             "_lag.png")
+plot_metrics([("cpu_all", "CPU, all 4 cores", "% of all 4 cores busy", "%"),
+              ("cpu_top", "Busiest core", "% busy (most loaded core)", "%")],
+             "Where the CPU time goes: whole board vs busiest core",
+             f"Sintel trailer, 1251 frames, {how}; mean of {repeats} runs. CPU sampled every 0.1 s from /proc/stat, first 1 s excluded.\n"
+             "Busiest core = the most loaded core in each sample. Low all-core % with one core near 100% = a single thread is the bottleneck.",
+             "_utilisation.png")
 
-# --- Figure 2: per-core heat strips over time -------------------------------------------------
+# --- Figure 3: per-core heat strips over time -------------------------------------------------
 lag_of = {k: statistics.mean(m["lag"] for m in v) for k, v in runs.items()}
 fig, axes = plt.subplots(len(STRIP_CONFIGS), 1, figsize=(14, 1.7 * len(STRIP_CONFIGS) + 1.6), facecolor=SURFACE,
                          sharex=True)
@@ -182,6 +188,6 @@ if image is not None:
 	bar.set_label("% busy", color=MUTED)
 	bar.outline.set_visible(False)
 	bar.ax.tick_params(colors=MUTED, length=0)
-out2 = csv_path.with_name(csv_path.stem + "_cores.png")
-fig.savefig(out2, dpi=200, facecolor=SURFACE)
-print(f"Saved {out2}")
+out = csv_path.with_name(csv_path.stem + "_cores.png")
+fig.savefig(out, dpi=200, facecolor=SURFACE)
+print(f"Saved {out}")
