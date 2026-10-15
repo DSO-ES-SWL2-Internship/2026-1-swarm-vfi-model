@@ -49,8 +49,8 @@ CHAINS = {
 	"i420": f"videoscale ! {SIZE} ! videoconvert ! video/x-raw,format=I420",
 }
 # The relay's lookup tables (copied from relay.py)
-VIDEO_TO_FULL = np.clip(np.round((np.arange(256) - 16) * 255 / 219), 0, 255).astype(np.uint8) # Covnersion from Y(UV) to grey
-FULL_TO_VIDEO = np.round(16 + np.arange(256) * 219 / 255).astype(np.uint8) # Conversion from grey to Y(UV)
+VIDEO_TO_FULL = np.clip(np.round((np.arange(256) - 16) * 255 / 219), 0, 255).astype(np.uint8)  # way in: video-range Y -> full-range grey
+FULL_TO_VIDEO = np.round(16 + np.arange(256) * 219 / 255).astype(np.uint8)  # way out: full-range grey -> video-range Y
 
 
 def run_gst(source, chain, out_path):
@@ -148,18 +148,18 @@ def main():
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp = Path(tmp)
 
-		# Method comparison (RGB method vs LUT method)
-		grey = grey_frames(tmp, args.frames) # Generate grey frames from the two methods
-		reference = reference_frames(tmp, args.frames) # Generate the reference grey frames using the ffmpeg method
+		# Way in: both methods' grey frames, and the reference they are scored against
+		grey = grey_frames(tmp, args.frames)  # grey frames from the rgb and lut methods
+		reference = reference_frames(tmp, args.frames)  # reference grey frames (ffmpeg BT.601 + PIL)
 
-		# Understanding RGB method
-		videoconvert_table = videoconvert_output_table(tmp) # Test the mapping of grey -> RGBx to Y(UV) values
+		# Way out: the rgb method's grey -> Y mapping, to compare with the lut method's FULL_TO_VIDEO
+		videoconvert_table = videoconvert_output_table(tmp)  # grey -> RGBx -> I420, for every grey value
 
 	print(f"{VIDEO.name}: first {len(reference)} frames, CPU decode and scale to {W}x{H}.\n")
 
-	check_model_input(grey, reference) # Before VFI
-	check_interpolation(grey, reference) # After VFI
-	check_output_table(videoconvert_table) # After VFI AND conversion back to YUV
+	check_model_input(grey, reference)  # before the model
+	check_interpolation(grey, reference)  # after the model
+	check_output_table(videoconvert_table)  # conversion back to YUV, on its own (no video or model involved)
 
 
 if __name__ == "__main__":
