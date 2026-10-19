@@ -20,6 +20,7 @@ MODELS_DIR = SCRIPT_DIR.parent.parent.parent / "artifacts"  # machine-learning/a
 MODEL_PATH = str(MODELS_DIR / "toy_unet_int8.onnx")
 TFLITE_MODEL_PATH = str(MODELS_DIR / "toy_unet_int8.tflite")
 VX_DELEGATE_PATH = "/usr/lib/libvx_delegate.so"  # board-only -- NXP's eIQ NPU delegate for TIM-VX
+CPU_THREADS = 4  # TFLite threads when the model runs on the CPU (--inference cpu): all four A53 cores
 # The NPU driver can save its compiled graph (*.nb) here and reuse it on later runs, skipping the
 # ~15s first-invoke compile (NXP i.MX ML User's Guide, sec. 8.1.3). Keyed by a hash of the model,
 # so a re-exported model recompiles automatically.
@@ -249,15 +250,18 @@ class ToyUnetBlenderTFLite:
 			Interpreter, load_delegate = tf.lite.Interpreter, tf.lite.experimental.load_delegate
 
 		delegates = []
-		if Path(VX_DELEGATE_PATH).exists():
+		if args.inference == "npu" and Path(VX_DELEGATE_PATH).exists():
 			VX_CACHE_DIR.mkdir(exist_ok=True)
 			os.environ.setdefault("VIV_VX_ENABLE_CACHE_GRAPH_BINARY", "1")  # read by the driver at load
 			os.environ.setdefault("VIV_VX_CACHE_BINARY_GRAPH_DIR", str(VX_CACHE_DIR))
 			delegates.append(load_delegate(VX_DELEGATE_PATH))
 			print("toy_unet_tflite: running on the NPU (vx_delegate)")
+		elif args.inference == "cpu":
+			print(f"toy_unet_tflite: running on the CPU ({CPU_THREADS} threads), as asked (--inference cpu)")
 		else:
 			print(f"toy_unet_tflite: {VX_DELEGATE_PATH} not found -- running on CPU, NOT the NPU")
-		self.interpreter = Interpreter(model_path=TFLITE_MODEL_PATH, experimental_delegates=delegates)
+		self.interpreter = Interpreter(model_path=TFLITE_MODEL_PATH, experimental_delegates=delegates,
+		                               num_threads=None if delegates else CPU_THREADS)
 		self.interpreter.allocate_tensors()
 		self.input_detail = self.interpreter.get_input_details()[0]
 		self.output_detail = self.interpreter.get_output_details()[0]
@@ -561,6 +565,9 @@ parser_args.add_argument("--encoder", choices=["auto", "vpu", "x264", "mpeg4"], 
 parser_args.add_argument("--range", choices=["rgb", "lut"], default="rgb",
                           help="how grey frames are kept in the model's full range (0-255): rgb = convert through "
                                "RGBx in GStreamer (original); lut = numpy lookup tables in the relay, no RGBx steps")
+parser_args.add_argument("--inference", choices=["npu", "cpu"], default="npu",
+                          help="where toy_unet_tflite runs the model: npu (vx_delegate, if installed) or cpu, e.g. "
+                               "for the all-CPU comparison in the hardware acceleration demo")
 parser_args.add_argument("--convert-threads", type=int, default=1,
                           help="threads per videoconvert (n-threads); 1 = GStreamer's default")
 args = parser_args.parse_args()
