@@ -28,6 +28,12 @@ def conv_t_layer():
 	return keras.Model(x, layers.Conv2DTranspose(16, 3, strides=2, padding="same", activation="relu")(x), name="convT")
 
 
+def mobilenet():
+	# Same network as the board's mobilenet_v1_1.0_224_quant.tflite, with random weights: they don't change
+	# the timing, and this avoids downloading the ImageNet weights.
+	return keras.applications.MobileNet(input_shape=(224, 224, 3), alpha=1.0, weights=None)
+
+
 def convert(model, fp16):
 	# Same fixed batch 1 and frozen weights as export_tflite.py (a dynamic batch breaks delegation).
 	specs = [tf.TensorSpec([1, *inp.shape[1:]], inp.dtype) for inp in model.inputs]
@@ -42,7 +48,7 @@ def convert(model, fp16):
 
 def main():
 	OUT_DIR.mkdir(parents=True, exist_ok=True)
-	for name, model in (("toy_unet", interpolate.load_model()), ("convT", conv_t_layer())):
+	for name, model in (("toy_unet", interpolate.load_model()), ("convT", conv_t_layer()), ("mobilenet_v1", mobilenet())):
 		for suffix, fp16 in (("fp32", False), ("fp16", True)):
 			path = OUT_DIR / f"{name}_{suffix}.tflite"
 			path.write_bytes(convert(model, fp16))
