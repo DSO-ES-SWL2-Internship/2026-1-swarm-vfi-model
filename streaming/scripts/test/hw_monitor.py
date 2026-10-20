@@ -1,10 +1,13 @@
-# Live load of every accelerator on the iMX8, one screen, refreshed every second: CPU (per core),
+# Live load of every accelerator on the iMX8, one screen, refreshed 4 times a second: CPU (per core),
 # GPU and NPU (galcore's gc/load), and VPU decode/encode rate (interrupt counts). Runs beside any
 # pipeline -- e.g. the real relay in Demo 2 -- instead of nnshark, whose live tracer breaks the relay's
 # TCP output. Standard library only.
 #
-# Usage: python3 hw_monitor.py [--interval 1] [--csv load.csv]
+# Usage: python3 hw_monitor.py [--interval 0.25] [--csv load.csv]
 #   gc/load needs debugfs: mount -t debugfs none /sys/kernel/debug
+#   CPU and VPU figures are averages over the last WINDOW seconds, recomputed at every refresh: a
+#   0.25 s sample alone is too coarse (/proc/stat counts 10 ms ticks; the VPU rate moves in steps of
+#   4 frames/s), so the screen moves often but the numbers stay steady.
 #
 # What each number is:
 #   CPU   busy % per core from /proc/stat (the counters top/htop read); includes this script (~1%).
@@ -28,7 +31,8 @@ VPU_IRQS = {"decode": "hantrodec", "encode": "hx280enc"}
 # hantrodec and 1251 hx280enc interrupts.
 IRQS_PER_FRAME = 1
 VPU_SCALE = 60  # frames/s that fills the VPU bars (48 = Demo 2's output rate)
-HISTORY = 30  # seconds of sparkline per row
+WINDOW = 1.0  # seconds the CPU and VPU figures are averaged over
+HISTORY = 30  # seconds of sparkline per row, one point per second
 
 BAR_W = 24
 SPARKS = " ▁▂▃▄▅▆▇█"
@@ -115,13 +119,16 @@ def draw(stamp, cores, gc, vpu, hist):
 
 def main():
 	parser = argparse.ArgumentParser(description=__doc__)
-	parser.add_argument("--interval", type=float, default=1.0, help="seconds between updates")
+	parser.add_argument("--interval", type=float, default=0.25, help="seconds between updates")
 	parser.add_argument("--csv", help="also append every sample to this CSV file")
 	args = parser.parse_args()
 	sys.stdout.reconfigure(encoding="utf-8")  # block characters, even under the board's POSIX locale
 
-	prev_cpu, prev_irq, prev_t = read_cpu_ticks(), read_vpu_irqs(), time.monotonic()
-	hist = {}
+	# Recent (time, cpu ticks, irq counts) readings; each figure compares the newest with the oldest
+	# reading still within WINDOW.
+	readings = deque([(time.monotonic(), read_cpu_ticks(), read_vpu_irqs())])
+	prev_cpu = readings[0][1]
+	hist, next_point = {}, 0.0
 	writer = None
 	if args.csv:
 		csv_file = open(args.csv, "a", newline="")
@@ -134,21 +141,25 @@ def main():
 	try:
 		while True:
 			time.sleep(args.interval)
-			cpu, irq, now = read_cpu_ticks(), read_vpu_irqs(), time.monotonic()
+			now, cpu, irq = time.monotonic(), read_cpu_ticks(), read_vpu_irqs()
+			readings.append((now, cpu, irq))
+			while len(readings) > 2 and now - readings[1][0] >= WINDOW - 1e-3:
+				readings.popleft()
+			then, prev_cpu, prev_irq = readings[0]
 			cores = [100 * (cb - pb) / (ct - pt) if ct > pt else 0.0 for (pb, pt), (cb, ct) in zip(prev_cpu, cpu)]
-			dt = now - prev_t
-			vpu = {u: (irq[u] - prev_irq.get(u, irq[u])) / IRQS_PER_FRAME / dt for u in irq}
+			vpu = {u: (irq[u] - prev_irq.get(u, irq[u])) / IRQS_PER_FRAME / (now - then) for u in irq}
 			gc = read_gc_load()
-			prev_cpu, prev_irq, prev_t = cpu, irq, now
 
 			values = {"cpu": sum(cores) / len(cores), **{f"core{i}": p for i, p in enumerate(cores)}}
 			if gc is not None:
 				values.update(gpu=gc.get(0, 0), npu=gc.get(1, 0))
 			values.update({u: 100 * fps / VPU_SCALE for u, fps in vpu.items()})
-			for key, pct in values.items():
-				hist.setdefault(key, deque(maxlen=HISTORY)).append(pct)
+			if now >= next_point:
+				for key, pct in values.items():
+					hist.setdefault(key, deque(maxlen=HISTORY)).append(pct)
+				next_point = now + 1.0
 
-			stamp = datetime.now().strftime("%H:%M:%S")
+			stamp = datetime.now().strftime("%H:%M:%S.%f")[:-4]
 			draw(stamp, cores, gc, vpu, hist)
 			if writer:
 				writer.writerow([stamp, f"{values['cpu']:.1f}", *[f"{p:.1f}" for p in cores],
