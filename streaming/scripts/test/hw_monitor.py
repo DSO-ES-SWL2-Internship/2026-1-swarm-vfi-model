@@ -3,11 +3,13 @@
 # pipeline -- e.g. the real relay in Demo 2 -- instead of nnshark, whose live tracer breaks the relay's
 # TCP output. Standard library only.
 #
-# Usage: python3 hw_monitor.py [--interval 0.25] [--csv load.csv]
+# Usage: python3 hw_monitor.py [--interval 0.1] [--csv load.csv]
 #   gc/load needs debugfs: mount -t debugfs none /sys/kernel/debug
-#   CPU and VPU figures are averages over the last WINDOW seconds, recomputed at every refresh: a
-#   0.25 s sample alone is too coarse (/proc/stat counts 10 ms ticks; the VPU rate moves in steps of
-#   4 frames/s), so the screen moves often but the numbers stay steady.
+#   Every figure is an average over the last WINDOW seconds, recomputed at every refresh: a 0.1 s
+#   sample alone is too coarse (/proc/stat counts 10 ms ticks; the VPU rate moves in steps of
+#   4 frames/s), so the screen moves often but the numbers stay steady. CPU and VPU are running
+#   totals, so the average is a difference over the window; gc/load is already a percentage that
+#   changes at about every refresh, so its readings within the window are averaged instead.
 #
 # What each number is:
 #   CPU   busy % per core from /proc/stat (the counters top/htop read); includes this script (~1%).
@@ -31,7 +33,7 @@ VPU_IRQS = {"decode": "hantrodec", "encode": "hx280enc"}
 # hantrodec and 1251 hx280enc interrupts.
 IRQS_PER_FRAME = 1
 VPU_SCALE = 60  # frames/s that fills the VPU bars (48 = Demo 2's output rate)
-WINDOW = 1.0  # seconds the CPU and VPU figures are averaged over
+WINDOW = 1.0  # seconds every figure is averaged over
 HISTORY = 30  # seconds of sparkline per row, one point per second
 
 BAR_W = 24
@@ -119,7 +121,7 @@ def draw(stamp, cores, gc, vpu, hist):
 
 def main():
 	parser = argparse.ArgumentParser(description=__doc__)
-	parser.add_argument("--interval", type=float, default=0.25, help="seconds between updates")
+	parser.add_argument("--interval", type=float, default=0.1, help="seconds between updates")
 	parser.add_argument("--csv", help="also append every sample to this CSV file")
 	args = parser.parse_args()
 	sys.stdout.reconfigure(encoding="utf-8")  # block characters, even under the board's POSIX locale
@@ -128,6 +130,7 @@ def main():
 	# reading still within WINDOW.
 	readings = deque([(time.monotonic(), read_cpu_ticks(), read_vpu_irqs())])
 	prev_cpu = readings[0][1]
+	gc_readings = deque()  # (time, {core: load%}) within WINDOW
 	hist, next_point = {}, 0.0
 	writer = None
 	if args.csv:
@@ -149,6 +152,11 @@ def main():
 			cores = [100 * (cb - pb) / (ct - pt) if ct > pt else 0.0 for (pb, pt), (cb, ct) in zip(prev_cpu, cpu)]
 			vpu = {u: (irq[u] - prev_irq.get(u, irq[u])) / IRQS_PER_FRAME / (now - then) for u in irq}
 			gc = read_gc_load()
+			if gc is not None:
+				gc_readings.append((now, gc))
+				while now - gc_readings[0][0] >= WINDOW - 1e-3:
+					gc_readings.popleft()
+				gc = {c: sum(g.get(c, 0) for _, g in gc_readings) / len(gc_readings) for c in (0, 1)}
 
 			values = {"cpu": sum(cores) / len(cores), **{f"core{i}": p for i, p in enumerate(cores)}}
 			if gc is not None:
@@ -163,7 +171,7 @@ def main():
 			draw(stamp, cores, gc, vpu, hist)
 			if writer:
 				writer.writerow([stamp, f"{values['cpu']:.1f}", *[f"{p:.1f}" for p in cores],
-				                 gc.get(0, "") if gc else "", gc.get(1, "") if gc else "",
+				                 *[f"{gc[c]:.1f}" if gc else "" for c in (0, 1)],
 				                 *[f"{vpu[u]:.1f}" if u in vpu else "" for u in VPU_IRQS]])
 				csv_file.flush()
 	except KeyboardInterrupt:
