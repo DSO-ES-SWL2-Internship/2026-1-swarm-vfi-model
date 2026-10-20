@@ -4,7 +4,8 @@
 # core, 3D GPU / NPU / G2D load, DDR traffic and each element's time per frame. Run on the iMX8, over SSH
 # (the view doesn't refresh well on the serial console). Press q to quit.
 # Usage: ./nnshark_demo.sh [--npu] [480p|720p|1080p]   (default 1080p)
-#   --npu  also runs the U-Net on the NPU in the background (benchmark_model), so the NPU load shows too.
+#   --npu  also runs the U-Net on the NPU in the background (benchmark_model), so the NPU load shows too: one
+#          inference every ~42 ms, as in the relay (one per input frame at 24 fps), not back to back.
 #
 # GPU/NPU load needs the board booted with galcore.gpuProfiler=1 galcore.powerManagement=0 (NXP UG10166
 # sec 9.3.1); the script warns if they are missing. With power management off, don't use this boot for
@@ -29,6 +30,16 @@ BENCHMARK=/usr/bin/tensorflow-lite-2.19.0/examples/benchmark_model
 DELEGATE=/usr/lib/libvx_delegate.so
 
 [[ -f "$VIDEO" ]] || { echo "$VIDEO not found: copy it from the VM first" >&2; exit 1; }
+# Under the live tracer, a file with an audio track (the 480p and 720p trailers have AAC) stalls on the first frame,
+# even with the audio linked (tested 20 Oct 2026; the 1080p file has no audio and plays). Play a video-only copy,
+# remuxed once into /tmp (no re-encoding).
+VIDEO_ONLY="/tmp/sintel_trailer-$RES-video.mp4"
+if [[ ! -f "$VIDEO_ONLY" ]]; then
+	echo "Making a video-only copy of $VIDEO (the tracer stalls on files with audio)..."
+	gst-launch-1.0 -q filesrc location="$VIDEO" ! qtdemux ! h264parse ! mp4mux ! filesink location="$VIDEO_ONLY" ||
+		{ rm -f "$VIDEO_ONLY"; echo "remux failed" >&2; exit 1; }
+fi
+VIDEO=$VIDEO_ONLY
 [[ $NPU == 0 || -f "$MODEL" ]] || { echo "$MODEL not found: copy it from the VM first" >&2; exit 1; }
 [[ -n "${SSH_CONNECTION:-}" ]] || echo "Note: not an SSH session; the live view may not render well on the serial console."
 grep -q "galcore.gpuProfiler=1" /proc/cmdline ||
@@ -48,8 +59,11 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ $NPU == 1 ]]; then
-	# Enough runs to outlast the video (~12 ms each); killed on exit. Output to a log so it doesn't mix with the view.
-	"$BENCHMARK" --graph="$MODEL" --external_delegate_path="$DELEGATE" --num_runs=100000 > /tmp/nnshark_demo_npu.log 2>&1 &
+	# One ~12 ms inference every ~42 ms (run_delay 0.03 s), the relay's rate at 24 fps. Back to back, the NPU sat at
+	# ~92% and the G2D (same galcore driver) may have been starved. Enough runs to outlast the video; killed on exit.
+	# Output to a log so it doesn't mix with the view.
+	"$BENCHMARK" --graph="$MODEL" --external_delegate_path="$DELEGATE" --num_runs=100000 --run_delay=0.03 \
+		> /tmp/nnshark_demo_npu.log 2>&1 &
 	BENCH_PID=$!
 	echo "Model running on the NPU in the background (log: /tmp/nnshark_demo_npu.log); waiting for its warm-up..."
 	sleep 5
