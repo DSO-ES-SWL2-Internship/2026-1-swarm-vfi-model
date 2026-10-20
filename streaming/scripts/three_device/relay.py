@@ -666,6 +666,17 @@ last_relay_cpu = None
 # lag given VFI compute happens here.
 arrived_count = 0
 relayed_count = 0
+# Also printed at least every PROGRESS_INTERVAL seconds, so a slow run (e.g. all on the board's CPU) still shows
+# whether it is moving.
+PROGRESS_INTERVAL = 5
+last_progress = {}
+
+
+def progress(label, count):
+	now = time.time()
+	if count == 1 or count % 120 == 0 or now - last_progress.get(label, now) >= PROGRESS_INTERVAL:
+		print(f"[{label}: {count}]")
+		last_progress[label] = now
 
 
 def track_activity(handler):
@@ -673,8 +684,7 @@ def track_activity(handler):
 		global last_frame_time, arrived_count
 		last_frame_time = time.time()
 		arrived_count += 1
-		if arrived_count == 1 or arrived_count % 120 == 0:
-			print(f"[arrived: {arrived_count}]")
+		progress("arrived", arrived_count)
 		return handler(sink)
 	return wrapped
 
@@ -689,8 +699,7 @@ def on_encoded_buffer(pad, info):
 	last_relay_time = now
 	last_relay_cpu = cpu
 	relayed_count += 1
-	if relayed_count == 1 or relayed_count % 120 == 0:
-		print(f"[relayed: {relayed_count}]")
+	progress("relayed", relayed_count)
 	return Gst.PadProbeReturn.OK
 
 

@@ -34,12 +34,15 @@ DELEGATE=/usr/lib/libvx_delegate.so
 grep -q "galcore.gpuProfiler=1" /proc/cmdline ||
 	echo "Note: galcore.gpuProfiler=1 is not on the kernel command line, so GPU/NPU load may not show (see header)."
 
-# A perf process left over from an earlier nnshark run inflates the DDR numbers (NXP UG10166 sec 9.3.3).
-pkill -9 -f nnshark-perf-ddr.sh 2>/dev/null || true
+# The live tracer's DDR loop (/tmp/nnshark-perf-ddr.sh, perf every second) outlives the pipeline, and a leftover one
+# inflates the DDR numbers (NXP UG10166 sec 9.3.3). The board's BusyBox has no pkill, hence ps + awk.
+stop_ddr_loops() { ps -o pid,args | awk '/[n]nshark-perf-ddr/ {print $1}' | xargs -r kill -9 2>/dev/null || true; }
+stop_ddr_loops
 
 BENCH_PID=""
 cleanup() {
 	[[ -n "$BENCH_PID" ]] && kill "$BENCH_PID" 2>/dev/null || true
+	stop_ddr_loops
 	reset 2>/dev/null || stty sane  # the live view can leave the terminal in raw mode if quit with Ctrl+C
 }
 trap cleanup EXIT
