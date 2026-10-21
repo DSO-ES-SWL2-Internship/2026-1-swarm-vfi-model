@@ -4,6 +4,7 @@
 # ordinary memory may instead sit in 2 MB huge pages (transparent huge pages), needing only a couple of entries.
 #
 # Run on the iMX8: python3 scaler_tlb.py [--decoder vpu|cpu] [480p|720p|1080p]
+# (each case runs in its own process; one leaving GStreamer state behind crashed the next on the board)
 #
 # The same decoded frames are scaled twice, in two separate runs that differ only in the memory:
 #   as-is   the decoder's own buffer goes to videoscale (VPU: a linux,cma dmabuf)
@@ -25,9 +26,12 @@
 
 import argparse
 import ctypes
+import json
 import os
 import statistics
 import struct
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -72,7 +76,6 @@ def read_counters(counters):
 
 def ordinary_copy(buf):
 	# The frame copied into ordinary (malloc'd) memory, with its timestamps and layout (video meta).
-	# Not buf.copy_deep(): on the board that crashes (SIGSEGV) in the dmabuf allocator's memory copy.
 	new = Gst.Buffer.new_wrapped(buf.extract_dup(0, buf.get_size()))
 	new.pts, new.dts, new.duration = buf.pts, buf.dts, buf.duration
 	meta = GstVideo.buffer_get_video_meta(buf)
@@ -137,8 +140,9 @@ def run(source, copy):
 	scale.set_state(Gst.State.PLAYING)
 	dec.set_state(Gst.State.PLAYING)
 	loop.run()
-	for pipe in (dec, scale):
+	for pipe in (dec, scale):  # watches left on the main loop crash the next run (SIGSEGV on the board)
 		pipe.set_state(Gst.State.NULL)
+		pipe.get_bus().remove_signal_watch()
 	for fd in counters.values():
 		os.close(fd)
 	return frames
@@ -158,21 +162,32 @@ def main():
 	parser = argparse.ArgumentParser(description="Per-frame cost and counters of videoscale on decoder memory vs a copy")
 	parser.add_argument("--decoder", choices=DECODERS, default="vpu")
 	parser.add_argument("res", nargs="?", default="1080p", choices=["480p", "720p", "1080p"])
+	parser.add_argument("--case", choices=["as-is", "copy"], help=argparse.SUPPRESS)  # one case, in a child process
 	args = parser.parse_args()
-	Gst.init(None)
 
-	video = VIDEOS / f"sintel_trailer-{args.res}.mp4"
-	source = f"filesrc location={video} ! qtdemux ! h264parse ! {DECODERS[args.decoder]}"
-	print(f"{args.decoder} decode, {args.res}; transparent huge pages: {huge_pages()[0]}")
-
-	results = {}
-	for label, copy in (("as-is", False), ("copy", True)):
-		print(f"{label}:")
-		frames = run(source, copy)[WARMUP:]
-		results[label] = {k: statistics.median(f[k] for f in frames) for k in frames[0]} if frames else {}
+	if args.case:  # child: run one case, print its medians as the last line
+		Gst.init(None)
+		video = VIDEOS / f"sintel_trailer-{args.res}.mp4"
+		source = f"filesrc location={video} ! qtdemux ! h264parse ! {DECODERS[args.decoder]}"
+		frames = run(source, args.case == "copy")[WARMUP:]
 		print(f"  {len(frames)} frames timed; huge pages in use by this process now: {huge_pages()[1]}")
+		print(json.dumps({k: statistics.median(f[k] for f in frames) for k in frames[0]} if frames else {}))
+		return
 
-	keys = list(next(iter(results.values())))
+	# Each case runs in its own process, so nothing one run leaves behind can affect the other.
+	print(f"{args.decoder} decode, {args.res}; transparent huge pages: {huge_pages()[0]}")
+	results = {}
+	for label in ("as-is", "copy"):
+		print(f"{label}:", flush=True)
+		child = subprocess.run([sys.executable, "-u", __file__, "--decoder", args.decoder, args.res, "--case", label],
+		                       capture_output=True, text=True)
+		lines = [l for l in child.stdout.splitlines() if l.startswith("  ")]
+		print("\n".join(lines))
+		if child.returncode != 0:
+			sys.exit(f"  {label} run failed (exit {child.returncode}):\n{child.stderr[-2000:]}")
+		results[label] = json.loads(child.stdout.splitlines()[-1])
+
+	keys = list(results["as-is"])
 	print(f"\nmedian per frame inside videoscale ({args.decoder} decode, {args.res}):")
 	print(f"  {'':8}" + "".join(f"{k:>14}" for k in keys))
 	for label, med in results.items():
