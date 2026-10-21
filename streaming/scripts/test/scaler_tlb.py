@@ -35,7 +35,8 @@ from pathlib import Path
 import gi
 gi.require_version("Gst", "1.0")
 gi.require_version("GstApp", "1.0")
-from gi.repository import GLib, Gst, GstApp  # noqa: F401 (GstApp gives appsrc/appsink their methods)
+gi.require_version("GstVideo", "1.0")
+from gi.repository import GLib, Gst, GstApp, GstVideo  # noqa: F401 (GstApp gives appsrc/appsink their methods)
 
 VIDEOS = Path(__file__).resolve().parent.parent.parent / "videos"
 DECODERS = {"vpu": "vpudec frame-drop=false", "cpu": "avdec_h264"}
@@ -69,6 +70,18 @@ def read_counters(counters):
 	return {name: struct.unpack("Q", os.read(fd, 8))[0] for name, fd in counters.items()}
 
 
+def ordinary_copy(buf):
+	# The frame copied into ordinary (malloc'd) memory, with its timestamps and layout (video meta).
+	# Not buf.copy_deep(): on the board that crashes (SIGSEGV) in the dmabuf allocator's memory copy.
+	new = Gst.Buffer.new_wrapped(buf.extract_dup(0, buf.get_size()))
+	new.pts, new.dts, new.duration = buf.pts, buf.dts, buf.duration
+	meta = GstVideo.buffer_get_video_meta(buf)
+	if meta:
+		GstVideo.buffer_add_video_meta_full(new, meta.flags, meta.format, meta.width, meta.height,
+		                                    meta.n_planes, list(meta.offset), list(meta.stride))
+	return new
+
+
 def run(source, copy):
 	# Scales every frame once; returns a list of per-frame {"ms": ..., counter: ...}.
 	dec = Gst.parse_launch(f"{source} ! appsink name=out emit-signals=true sync=false max-buffers=2")
@@ -84,7 +97,7 @@ def run(source, copy):
 		if first[0]:
 			appsrc.set_caps(sample.get_caps())
 		if copy:
-			buf = buf.copy_deep()  # gst_memory_copy: new ordinary memory, video meta kept
+			buf = ordinary_copy(buf)
 		if first[0]:
 			mem = buf.peek_memory(0)
 			print(f"  videoscale input: {mem.allocator.mem_type if mem.allocator else '?'}, "
