@@ -2,7 +2,7 @@
 # between the steps, change the speed? Each configuration runs the 1080p trailer flat out (fakesink sync=false)
 # and reports the wall time per frame and the CPU time it used.
 #
-# Run on the iMX8: python3 streaming/scripts/test/pipeline_suite.py [--repeats 2] [--res 1080p]
+# Run on the iMX8: python3 streaming/scripts/test/pipeline_suite.py [--group steps|avdec] [--repeats 2] [--res 1080p]
 #
 # Without queues, one GStreamer thread runs every step for a frame before starting the next frame, so the
 # time per frame is about the SUM of the steps. A queue starts a new thread for the steps after it, so with a
@@ -19,6 +19,11 @@
 # The last two rows are the relay's real video chain (relay.py, HW mode, --range rgb) without the model:
 # G2D RGB -> grey for the model (CPU videoconvert), then grey -> RGBx -> I420 for the encoder (CPU), each
 # conversion a step of its own, so with FIFOs every one gets its own thread.
+#
+# --group avdec tests the claim that avdec_h264 already overlaps with the steps after it: CPU decode -> G2D
+# scale -> VPU encode, with and without FIFOs, so the only CPU-heavy step is the decode itself. "cpu1" is the
+# control, avdec_h264 limited to one thread: with no worker threads to overlap, the FIFOs should help it the way
+# they help vpudec.
 
 import argparse
 import csv
@@ -29,7 +34,7 @@ from pathlib import Path
 VIDEOS = Path(__file__).resolve().parent.parent.parent / "videos"
 OUT = Path(__file__).resolve().parent.parent.parent.parent / "outputs" / "pipeline_suite"
 
-DECODE = {"cpu": "avdec_h264", "vpu": "vpudec frame-drop=false"}
+DECODE = {"cpu": "avdec_h264", "cpu1": "avdec_h264 max-threads=1", "vpu": "vpudec frame-drop=false"}
 SCALE = {"cpu": "videoscale ! video/x-raw,width=448,height=256",
          "g2d": "imxvideoconvert_g2d ! video/x-raw,width=448,height=256"}
 ENCODE = {"cpu": "x264enc bitrate=2000", "vpu": "vpuenc_h264 bitrate=2000"}
@@ -39,7 +44,7 @@ RELAY_CONVERSIONS = [  # relay.py INPUT_CONVERTERS["g2d"] and make_output_conver
 ]
 
 # (decode, scale, encode, queues[, relay conversions]), in the order of the slides. None = step left out.
-CONFIGS = [
+CONFIGS = {"steps": [
 	("cpu", None, None, False),  # decode alone, for reference
 	("vpu", None, None, False),
 	("cpu", "cpu", "cpu", False),  # 1. all CPU
@@ -53,7 +58,14 @@ CONFIGS = [
 	("cpu", "cpu", "cpu", True),  # control: FIFOs on the all-CPU pipeline
 	("vpu", "g2d", "vpu", False, True),  # 6. the relay's real chain, with its colour conversions
 	("vpu", "g2d", "vpu", True, True),
-]
+], "avdec": [
+	("cpu", None, None, False),  # decode alone: the slowest step
+	("cpu", "g2d", "vpu", False),
+	("cpu", "g2d", "vpu", True),
+	("cpu1", None, None, False),  # control: avdec_h264 on one thread
+	("cpu1", "g2d", "vpu", False),
+	("cpu1", "g2d", "vpu", True),
+]}
 
 
 def label(dec, scale, enc, queues, convert=False):
@@ -92,18 +104,20 @@ def main():
 	parser.add_argument("--repeats", type=int, default=2, help="runs per configuration; the fastest counts")
 	parser.add_argument("--res", default="1080p", choices=["480p", "720p", "1080p"])
 	parser.add_argument("--frames", type=int, default=1251, help="frames in the video")
+	parser.add_argument("--group", default="steps", choices=CONFIGS, help="steps: the slides' sequence; "
+	                    "avdec: CPU decode with and without FIFOs")
 	args = parser.parse_args()
 	video = VIDEOS / f"sintel_trailer-{args.res}.mp4"
 
 	OUT.mkdir(parents=True, exist_ok=True)
-	out = OUT / f"pipeline_suite_{args.res}_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+	out = OUT / f"pipeline_suite_{args.group}_{args.res}_{time.strftime('%Y%m%d_%H%M%S')}.csv"
 	print(f"{args.res}, {args.frames} frames, fastest of {args.repeats}")
 	print(f"{'configuration':58} {'wall s':>7} {'ms/frame':>9} {'fps':>6} {'CPU s':>6} {'cores':>6}")
 	with open(out, "w", newline="") as f:
 		writer = csv.writer(f)
 		writer.writerow(["configuration", "decode", "scale", "encode", "fifos", "wall_s", "ms_per_frame", "fps",
 		                 "cpu_s", "cores_busy", "all_runs_wall_s"])
-		for config in CONFIGS:
+		for config in CONFIGS[args.group]:
 			runs = [run(pipeline(video, *config)) for _ in range(args.repeats)]
 			wall, cpu = min(runs)
 			name = label(*config)
