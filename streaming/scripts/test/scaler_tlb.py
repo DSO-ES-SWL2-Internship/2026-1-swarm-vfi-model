@@ -1,14 +1,16 @@
-# Why is the CPU scaler slower on VPU frames than on ordinary memory, when both are cacheable and read
-# equally fast in a straight copy (trace_buffers.py)? Suspect: the TLB. A 1080p frame spans ~900 4 KB pages,
-# more than the A53's TLB holds, and a scaler jumping between rows touches many pages per output row;
-# ordinary memory may instead sit in 2 MB huge pages (transparent huge pages), needing only a couple of entries.
+# Why is the CPU scaler slower on VPU frames than on ordinary memory? This is even though both types are 
+# cacheable and read equally fast in a straight copy (trace_buffers.py). 
+# 
+# Suspect: the TLB. A 1080p frame spans ~900 4 KB pages, more than the A53's TLB holds, and a scaler 
+# jumping between rows touches many pages per output row; ordinary memory may instead sit in 2 MB huge 
+# pages (transparent huge pages), needing only a couple of entries.
 #
 # Run on the iMX8: python3 scaler_tlb.py [--decoder vpu|cpu] [480p|720p|1080p]
 # (each case runs in its own process; one leaving GStreamer state behind crashed the next on the board)
 #
 # The same decoded frames are scaled twice, in two separate runs that differ only in the memory:
-#   as-is   the decoder's own buffer goes to videoscale (VPU: a linux,cma dmabuf)
-#   copy    a deep copy of it, in ordinary memory, goes to videoscale
+#   VPU-mem case: as-is   the decoder's own buffer goes to videoscale (VPU: a linux,cma dmabuf)
+#   ord-mem case: copy    a deep copy of it, in ordinary memory, goes to videoscale
 # decode -> appsink | (frame or copy) -> appsrc -> videoscale -> 448x256 -> fakesink
 # The copy is made outside the timed part, so only videoscale's own work is compared.
 #
@@ -57,9 +59,10 @@ EVENTS = {  # name: (type, config)
 libc = ctypes.CDLL(None, use_errno=True)
 
 
+# Open the counters for the cycles, L1 cache misses and dTLB misses
 def open_counters():
 	# One counter per event on the calling thread (pid 0, any CPU), counting from now. {} if not allowed.
-	counters = {}
+	counters = {}  # dict for mapping counter to value
 	for name, (kind, config) in EVENTS.items():
 		attr = struct.pack("IIQ", kind, 112, config).ljust(112, b"\0")  # perf_event_attr, all flags 0
 		fd = libc.syscall(SYS_PERF_EVENT_OPEN, attr, 0, -1, -1, 0)
