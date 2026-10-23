@@ -1,13 +1,21 @@
-# Live demo window for the 3-device setup (runs on the VM, instead of receiver.py): the original video on the
-# left, and on the right the stream the iMX8 sends back after the two hops (Pi -> iMX8 -> VM), side by side.
+# Live demo window for the 3-device setup (runs on the VM, instead of receiver.py): can VFI recover the frames a
+# stream has lost? Three panels, side by side:
+#   Lossy      the trailer with every other frame dropped (12 fps), as the Pi sends it
+#   Original   the trailer as intended (24 fps)
+#   Recovered  the stream the iMX8 sends back after the two hops (Pi -> iMX8 -> VM): the lossy 12 fps with the
+#              dropped frames interpolated by the relay's VFI, so 24 fps again
+# A "Show" checkbox per panel hides or shows it; all three are shown at the start.
 #
-# The original is the VM's own copy of the Pi's video (sintel_trailer-480p.mp4), shown the way the model sees
-# it -- scaled to 448x256 and in grey -- unless "Colour original" is ticked. It starts when the first processed
-# frame arrives, so the two sides run roughly together (the processed side lags by the network and relay
-# delay; it is not frame-exact). The processed side shows frames as they arrive: with an interpolating
-# technique it has twice the frame rate, which the fps counters show.
+# Lossy and Original are the VM's own copies of the videos, shown the way the model sees them -- scaled to
+# 448x256 and in grey -- unless "Colour" is ticked. They start when the first processed frame arrives, so the
+# panels run roughly together (the recovered side lags by the network and relay delay; it is not frame-exact).
+# The recovered side shows frames as they arrive; the fps counters show 12 vs 24.
 #
-# Usage: start the sender on the Pi and the relay on the iMX8 as usual (run_sender.sh, run_relay.sh), then
+# The lossy video is made beforehand (not dropped live, which would add load and timing jitter):
+# ./make_lossy_video.sh makes ../../videos/sintel_trailer-480p-12fps.mp4; copy it to the Pi's videos folder too.
+#
+# Usage: start the sender on the Pi with the lossy video (./run_sender.sh --video sintel_trailer-480p-12fps.mp4)
+# and the relay on the iMX8 as usual (run_relay.sh; it doubles the frame rate, 12 -> 24 fps), then
 #   python3 demo_viewer.py [--host 172.20.10.10] [--port 5001]
 # and press Connect (or pass --connect). The relay exits when the video ends, so restart it before pressing Connect again.
 
@@ -20,24 +28,27 @@ gi.require_version("Gst", "1.0")
 gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gst, Gtk
 
-VIDEO = Path(__file__).resolve().parent.parent.parent / "videos" / "sintel_trailer-480p.mp4"
+VIDEOS = Path(__file__).resolve().parent.parent.parent / "videos"
+ORIGINAL = VIDEOS / "sintel_trailer-480p.mp4"
+LOSSY = VIDEOS / "sintel_trailer-480p-12fps.mp4"  # make_lossy_video.sh
 SIZE = "video/x-raw,width=448,height=256"
-SCALE = 2  # each side is shown at 896x512
 
 
 class Side:
 	# One video panel: a GStreamer pipeline drawing into a gtksink widget, with a caption and an fps counter.
-	def __init__(self, title):
+	def __init__(self, title, scale):
 		self.title = title
+		self.width, self.height = int(448 * scale), int(256 * scale)
 		self.pipeline = None
 		self.frames, self.window_start, self.window_frames = 0, time.time(), 0
 		self.caption = Gtk.Label(label=title)
 		self.stats = Gtk.Label(label="-")
 		self.slot = Gtk.Box()
-		self.slot.set_size_request(448 * SCALE, 256 * SCALE)
+		self.slot.set_size_request(self.width, self.height)
 		self.box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-		for widget in (self.caption, self.slot, self.stats):
-			self.box.pack_start(widget, False, False, 0)
+		self.box.pack_start(self.caption, False, False, 0)
+		self.box.pack_start(self.slot, True, True, 0)  # grows with the window
+		self.box.pack_start(self.stats, False, False, 0)
 
 	def start(self, description, on_first_frame=None):
 		self.stop()
@@ -45,7 +56,7 @@ class Side:
 		sink = self.pipeline.get_by_name("sink")
 		self.slot.foreach(self.slot.remove)
 		widget = sink.get_property("widget")
-		widget.set_size_request(448 * SCALE, 256 * SCALE)
+		widget.set_size_request(self.width, self.height)
 		self.slot.pack_start(widget, True, True, 0)
 		widget.show()
 		self.frames, self.window_start, self.window_frames = 0, time.time(), 0
@@ -85,60 +96,79 @@ class Side:
 
 
 class DemoWindow(Gtk.Window):
-	def __init__(self, host, port):
-		super().__init__(title="VFI demo: original vs after two hops")
+	def __init__(self, host, port, scale):
+		super().__init__(title="VFI demo: recovering lost frames, 12 -> 24 fps")
 		self.connect("destroy", self.quit)
-		self.original = Side("Original (VM's copy of the Pi's video)")
-		self.processed = Side("Processed (Pi -> iMX8 -> VM)")
+		self.lossy = Side("Lossy: every other frame dropped (12 fps)", scale)
+		self.original = Side("Original (24 fps)", scale)
+		self.processed = Side("Recovered by VFI: 12 -> 24 fps (Pi -> iMX8 -> VM)", scale)
+		self.sides = [self.lossy, self.original, self.processed]
 
 		# Add buttons to GUI
 		self.host = Gtk.Entry(text=host, width_chars=15)
 		self.port = Gtk.SpinButton.new_with_range(1, 65535, 1)
 		self.port.set_value(port)
-		self.colour = Gtk.CheckButton(label="Colour original")
+		self.colour = Gtk.CheckButton(label="Colour")
 		connect = Gtk.Button(label="Connect")
 		connect.connect("clicked", self.on_connect)
 		stop = Gtk.Button(label="Stop")
 		stop.connect("clicked", lambda button: self.stop_all("Stopped."))
+		shows = []
+		for side, name in zip(self.sides, ("Lossy", "Original", "Recovered")):
+			show = Gtk.CheckButton(label=name, active=True)
+			show.connect("toggled", self.on_show, side)
+			shows.append(show)
 		self.status = Gtk.Label(label="Start the sender and relay, then press Connect.", xalign=0)
 
-		# Add video stream to GUI
+		# Add video streams to GUI
 		controls = Gtk.Box(spacing=8)
-		for widget in (Gtk.Label(label="iMX8"), self.host, Gtk.Label(label="port"), self.port, self.colour, connect, stop):
+		for widget in (Gtk.Label(label="iMX8"), self.host, Gtk.Label(label="port"), self.port, self.colour, connect, stop,
+		               Gtk.Label(label="   Show:"), *shows):
 			controls.pack_start(widget, False, False, 0)
-		videos = Gtk.Box(spacing=12)
-		videos.pack_start(self.original.box, True, True, 0)
-		videos.pack_start(self.processed.box, True, True, 0)
+		videos = Gtk.Box(spacing=12, homogeneous=True)
+		for side in self.sides:
+			videos.pack_start(side.box, True, True, 0)
 		layout = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin=12)
-		for widget in (controls, videos, self.status):
-			layout.pack_start(widget, False, False, 0)
+		layout.pack_start(controls, False, False, 0)
+		layout.pack_start(videos, True, True, 0)
+		layout.pack_start(self.status, False, False, 0)
 		self.add(layout)
 		GLib.timeout_add(500, self.tick)
 
+	def on_show(self, button, side):
+		# Hiding only hides the panel; its video keeps playing, so it is still in step when shown again.
+		side.box.set_visible(button.get_active())
+		self.resize(1, 1)  # shrink to fit the panels that are left
+
 	def on_connect(self, button):
 		self.stop_all()
+		if not LOSSY.exists():
+			self.status.set_text(f"{LOSSY.name} not found: run ./make_lossy_video.sh first.")
+			return
 		host, port = self.host.get_text().strip(), int(self.port.get_value())
 		self.status.set_text(f"Connecting to {host}:{port}, waiting for the first frame...")
 		# decodebin picks the decoder for whichever codec the relay sends (H.264 from the VPU, or MPEG-4).
 		self.processed.start(f"tcpclientsrc host={host} port={port} ! tsdemux ! decodebin ! videoconvert ! "
-		                     f"gtksink name=sink sync=false", on_first_frame=self.start_original)
+		                     f"gtksink name=sink sync=false", on_first_frame=self.start_local)
 
-	def start_original(self):
+	def start_local(self):
+		# The VM's own copies of the lossy and original videos, started together with the first processed frame.
 		grey = "" if self.colour.get_active() else "videoconvert ! video/x-raw,format=GRAY8 ! "
-		self.original.start(f"filesrc location={VIDEO} ! qtdemux ! h264parse ! avdec_h264 ! videoscale ! {SIZE} ! "
-		                    f"{grey}videoconvert ! gtksink name=sink sync=true")
+		for side, video in ((self.lossy, LOSSY), (self.original, ORIGINAL)):
+			side.start(f"filesrc location={video} ! qtdemux ! h264parse ! avdec_h264 ! videoscale ! {SIZE} ! "
+			           f"{grey}videoconvert ! gtksink name=sink sync=true")
 		self.status.set_text("Playing.")
 		return False  # run once (GLib.idle_add)
 
 	def stop_all(self, message=None):
-		self.processed.stop()
-		self.original.stop()
+		for side in self.sides:
+			side.stop()
 		if message:
 			self.status.set_text(message)
 
 	def tick(self):
-		self.original.update_stats()
-		self.processed.update_stats()
+		for side in self.sides:
+			side.update_stats()
 		return True
 
 	def quit(self, *args):
@@ -150,10 +180,11 @@ def main():
 	parser = argparse.ArgumentParser()
 	parser.add_argument("--host", default="172.20.10.10", help="iMX8's IP address")
 	parser.add_argument("--port", type=int, default=5001, help="relay's listen port")
+	parser.add_argument("--scale", type=float, default=1.4, help="size of each panel, x 448x256 (window can be enlarged)")
 	parser.add_argument("--connect", action="store_true", help="connect straight away")
 	args = parser.parse_args()
 	Gst.init(None)
-	window = DemoWindow(args.host, args.port)
+	window = DemoWindow(args.host, args.port, args.scale)
 	window.show_all()
 	if args.connect:
 		window.on_connect(None)

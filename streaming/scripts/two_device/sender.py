@@ -9,7 +9,7 @@ from gi.repository import Gst
 SCRIPT_DIR = Path(__file__).resolve().parent
 VIDEOS_DIR = SCRIPT_DIR.parent.parent / "videos"  # streaming/videos -- two levels up
 
-VIDEO_PATH = str(VIDEOS_DIR / "sintel_trailer-480p.mp4")
+DEFAULT_VIDEO = "sintel_trailer-480p.mp4"
 
 Gst.init(None)
 
@@ -42,6 +42,9 @@ def link_many(*elements):
 parser_args = argparse.ArgumentParser()
 parser_args.add_argument("--host", default="0.0.0.0", help="address to listen on (0.0.0.0 = all interfaces)")
 parser_args.add_argument("--port", type=int, default=5000)
+parser_args.add_argument("--video", default=DEFAULT_VIDEO,
+                         help="file in streaming/videos to send, e.g. sintel_trailer-480p-12fps.mp4 "
+                              "(made by three_device/make_lossy_video.sh) for the 12 -> 24 fps demo")
 args = parser_args.parse_args()
 
 # TCP variant: swaps rtph264pay/udpsink for mpegtsmux/tcpserversink. RTP's
@@ -74,7 +77,7 @@ if not link_many(parser, muxer, tcpserversink):
 	print("Elements from parser to tcpserversink could not be linked")
 	exit(-1)
 
-source.set_property("location", VIDEO_PATH)
+source.set_property("location", str(VIDEOS_DIR / args.video))
 tcpserversink.set_property("host", args.host)
 tcpserversink.set_property("port", args.port)
 tcpserversink.set_property("sync", True)  # pace to the buffers' own timestamps, same reasoning as sender.py
