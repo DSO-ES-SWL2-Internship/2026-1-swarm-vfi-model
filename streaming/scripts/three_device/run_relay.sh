@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Runs on the iMX8. Connects to the Pi, runs VFI, and listens for the VM to connect on LISTEN_PORT.
 # Usage: [PI_HOST=ip] [TECHNIQUE=name] ./run_relay.sh [extra relay.py args]
+# The 12 -> 24 fps demo, simplest path (the Pi sends sintel_trailer-256p-12fps.mp4, already the model's 448x256):
+#   ./run_relay.sh --scaler cpu   (no scaling; with the default --range video, no colour conversion either)
 set -euo pipefail
 cd "$(dirname "$0")"
 # Print Python's output immediately even when piped (e.g. | tee log.txt), instead of buffering it.

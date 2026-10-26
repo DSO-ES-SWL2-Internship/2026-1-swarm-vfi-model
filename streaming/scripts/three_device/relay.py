@@ -573,11 +573,13 @@ parser_args.add_argument("--scaler", choices=["auto", "cpu", "g2d"], default="au
                           help="scale/greyscale on: auto = g2d when decoding on the VPU, else cpu")
 parser_args.add_argument("--encoder", choices=["auto", "vpu", "x264", "mpeg4"], default="auto",
                           help="re-encode codec: auto = vpu (hardware) if installed, else x264, else mpeg4")
-parser_args.add_argument("--range", choices=["rgb", "lut", "video"], default="rgb",
+parser_args.add_argument("--range", choices=["rgb", "lut", "video"], default="video",
                           help="how grey frames are kept in the model's full range (0-255): rgb = convert through "
                                "RGBx in GStreamer (original); lut = numpy lookup tables in the relay, no RGBx steps; "
                                "video = toy_unet_tflite's video-range model (toy_unet_int8_video.tflite), so frames "
-                               "stay video range: no lookups on the CPU-scaler chain, one per input frame on the G2D chain")
+                               "stay video range: no lookups on the CPU-scaler chain, one per input frame on the G2D chain. "
+                               "Default: on the board it costs the least CPU, at the same accuracy (relay_range_test.sh, "
+                               "scripts/compare_range.py)")
 parser_args.add_argument("--inference", choices=["npu", "cpu"], default="npu",
                           help="where toy_unet_tflite runs the model: npu (vx_delegate, if installed) or cpu, e.g. "
                                "for the all-CPU comparison in the hardware acceleration demo")
@@ -586,15 +588,19 @@ parser_args.add_argument("--convert-threads", type=int, default=1,
 args = parser_args.parse_args()
 print(f"Range handling: {args.range}, videoconvert threads: {args.convert_threads}")
 
-# Arm A: receive (from Pi) -> demux (TS) -> decode -> scale -> convert to grey -> VFI technique -> appsink.
-# Identical to two_device/receiver.py's arm A -- same reasoning applies (see that file's comments
-# for the dynamic-pad-linking pattern).
+# Arm A: receive (from Pi) -> demux (TS) -> decode -> queue -> scale -> convert to grey -> queue -> appsink
+# (VFI technique). Like two_device/receiver.py's arm A (see that file's comments for the dynamic-pad-linking
+# pattern), plus two queues: each gives the step after it its own thread, so decoding, scaling/converting and
+# the VFI in the appsink callback work on different frames at once instead of taking turns in one thread
+# (pipeline_bench.py: with queues a pipeline runs at the pace of its slowest step, not the sum of its steps).
 tcpclientsrc = make_element("tcpclientsrc", "tcpclientsrc")
 demuxer = make_element("tsdemux", "demuxer")
 parser = make_element("h264parse", "parser")
 decoder = make_decoder(args.decoder)
 scaler, scaler_choice = make_scaler(args.scaler, decoder)
 input_converter = make_input_converter(scaler_choice, args.range in ("lut", "video"), args.convert_threads)
+decode_queue = make_element("queue", "decode_queue")
+vfi_queue = make_element("queue", "vfi_queue")
 appsink = make_element("appsink", "appsink")
 
 # Arm B: appsrc -> queue -> output converter -> encoder -> muxer -> tcpserversink. Unlike
@@ -616,13 +622,13 @@ tcpserversink = make_element("tcpserversink", "tcpserversink")
 pipeline = Gst.Pipeline.new("relay-pipeline")
 pipeline2 = Gst.Pipeline.new("relay-pipeline-2")
 
-elements = [tcpclientsrc, demuxer, parser, decoder, scaler, input_converter, appsink,
+elements = [tcpclientsrc, demuxer, parser, decoder, decode_queue, scaler, input_converter, vfi_queue, appsink,
             appsrc, queue, output_converter, encoder, muxer, tcpserversink]
 if not pipeline or not pipeline2 or not all(elements):
 	print("Failed to create pipeline or one of its elements")
 	exit(-1)
 
-for el in [tcpclientsrc, demuxer, parser, decoder, scaler, input_converter, appsink]:
+for el in [tcpclientsrc, demuxer, parser, decoder, decode_queue, scaler, input_converter, vfi_queue, appsink]:
 	pipeline.add(el)
 for el in [appsrc, queue, output_converter, encoder, muxer, tcpserversink]:
 	pipeline2.add(el)
@@ -634,7 +640,7 @@ if not tcpclientsrc.link(demuxer):
 	print("tcpclientsrc could not be linked to demuxer")
 	exit(-1)
 
-if not link_many(parser, decoder, scaler, input_converter, appsink):
+if not link_many(parser, decoder, decode_queue, scaler, input_converter, vfi_queue, appsink):
 	print("Elements from parser to appsink could not be linked")
 	exit(-1)
 
