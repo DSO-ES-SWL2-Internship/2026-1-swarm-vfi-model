@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -19,6 +20,8 @@ MODELS_DIR = SCRIPT_DIR.parent.parent.parent / "artifacts"  # machine-learning/a
 
 MODEL_PATH = str(MODELS_DIR / "toy_unet_int8.onnx")
 TFLITE_MODEL_PATH = str(MODELS_DIR / "toy_unet_int8.tflite")
+# --range video: the same U-Net trained on video-range grey (scripts/training.py --range video)
+TFLITE_VIDEO_MODEL_PATH = str(MODELS_DIR / "toy_unet_int8_video.tflite")
 VX_DELEGATE_PATH = "/usr/lib/libvx_delegate.so"  # board-only -- NXP's eIQ NPU delegate for TIM-VX
 CPU_THREADS = 4  # TFLite threads when the model runs on the CPU (--inference cpu): all four A53 cores
 # The NPU driver can save its compiled graph (*.nb) here and reuse it on later runs, skipping the
@@ -77,7 +80,8 @@ class RangeTimer:
 class FullRangeSink:
 	# Stands in for appsink when the input converter outputs video-range grey: the technique pulls samples as
 	# usual and gets frames already expanded to full range. Techniques only call
-	# pull_sample().get_buffer(), so that is all this provides.
+	# pull_sample().get_buffer(), so that is all this provides. With table=FULL_TO_VIDEO it does the opposite,
+	# for the video-range model on the G2D chain (whose grey is full range).
 	class Sample:
 		def __init__(self, buffer):
 			self.buffer = buffer
@@ -85,12 +89,12 @@ class FullRangeSink:
 		def get_buffer(self):
 			return self.buffer
 
-	def __init__(self, sink):
-		self.sink = sink
+	def __init__(self, sink, table=VIDEO_TO_FULL):
+		self.sink, self.table = sink, table
 
 	def pull_sample(self):
 		sample = self.sink.pull_sample()
-		return self.Sample(RangeTimer.run(sample.get_buffer(), VIDEO_TO_FULL)) if sample else sample
+		return self.Sample(RangeTimer.run(sample.get_buffer(), self.table)) if sample else sample
 
 
 class VideoRangeAppsrc:
@@ -260,11 +264,18 @@ class ToyUnetBlenderTFLite:
 			print(f"toy_unet_tflite: running on the CPU ({CPU_THREADS} threads), as asked (--inference cpu)")
 		else:
 			print(f"toy_unet_tflite: {VX_DELEGATE_PATH} not found -- running on CPU, NOT the NPU")
-		self.interpreter = Interpreter(model_path=TFLITE_MODEL_PATH, experimental_delegates=delegates,
+		model_path = TFLITE_VIDEO_MODEL_PATH if args.range == "video" else TFLITE_MODEL_PATH
+		print(f"toy_unet_tflite: model {Path(model_path).name}")
+		self.interpreter = Interpreter(model_path=model_path, experimental_delegates=delegates,
 		                               num_threads=None if delegates else CPU_THREADS)
 		self.interpreter.allocate_tensors()
 		self.input_detail = self.interpreter.get_input_details()[0]
 		self.output_detail = self.interpreter.get_output_details()[0]
+		# infer() turns uint8 pixels into the model's int8 input by a zero-point shift alone, which is only right
+		# if the input scale is 1/255 (export_tflite.py calibrates the input range to 0-1 for that).
+		in_scale = self.input_detail["quantization"][0]
+		if abs(in_scale * 255 - 1) > 1e-4:
+			sys.exit(f"toy_unet_tflite: input scale {in_scale} is not 1/255; re-export the model with export_tflite.py")
 
 		# The NPU compiles its graph on the FIRST real invoke(), a one-time ~15s stall (measured
 		# separately with benchmark_model). Left to happen mid-stream, it blocks the frame callback for
@@ -562,9 +573,11 @@ parser_args.add_argument("--scaler", choices=["auto", "cpu", "g2d"], default="au
                           help="scale/greyscale on: auto = g2d when decoding on the VPU, else cpu")
 parser_args.add_argument("--encoder", choices=["auto", "vpu", "x264", "mpeg4"], default="auto",
                           help="re-encode codec: auto = vpu (hardware) if installed, else x264, else mpeg4")
-parser_args.add_argument("--range", choices=["rgb", "lut"], default="rgb",
+parser_args.add_argument("--range", choices=["rgb", "lut", "video"], default="rgb",
                           help="how grey frames are kept in the model's full range (0-255): rgb = convert through "
-                               "RGBx in GStreamer (original); lut = numpy lookup tables in the relay, no RGBx steps")
+                               "RGBx in GStreamer (original); lut = numpy lookup tables in the relay, no RGBx steps; "
+                               "video = toy_unet_tflite's video-range model (toy_unet_int8_video.tflite), so frames "
+                               "stay video range: no lookups on the CPU-scaler chain, one per input frame on the G2D chain")
 parser_args.add_argument("--inference", choices=["npu", "cpu"], default="npu",
                           help="where toy_unet_tflite runs the model: npu (vx_delegate, if installed) or cpu, e.g. "
                                "for the all-CPU comparison in the hardware acceleration demo")
@@ -581,7 +594,7 @@ demuxer = make_element("tsdemux", "demuxer")
 parser = make_element("h264parse", "parser")
 decoder = make_decoder(args.decoder)
 scaler, scaler_choice = make_scaler(args.scaler, decoder)
-input_converter = make_input_converter(scaler_choice, args.range == "lut", args.convert_threads)
+input_converter = make_input_converter(scaler_choice, args.range in ("lut", "video"), args.convert_threads)
 appsink = make_element("appsink", "appsink")
 
 # Arm B: appsrc -> queue -> output converter -> encoder -> muxer -> tcpserversink. Unlike
@@ -594,7 +607,7 @@ appsink = make_element("appsink", "appsink")
 # thread), and queue decouples that from the thread actually encoding/sending downstream.
 appsrc = make_element("appsrc", "appsrc")
 queue = make_element("queue", "queue")
-output_converter = make_output_converter(args.range == "lut", args.convert_threads)
+output_converter = make_output_converter(args.range in ("lut", "video"), args.convert_threads)
 # GRAY8 -> I420 happens in output_converter above, via RGBx or as a plain copy with --range lut (see make_output_converter).
 encoder = make_encoder(args.encoder)
 muxer = make_element("mpegtsmux", "muxer")
@@ -722,6 +735,10 @@ technique = TECHNIQUES[args.technique](VideoRangeAppsrc(appsrc) if lut else apps
 # Only the CPU input converter hands over video-range grey in lut mode; G2D's is already full range.
 if lut and scaler_choice == "cpu":
 	appsink.connect("new-sample", track_activity(lambda sink: technique.on_new_sample(FullRangeSink(sink))))
+# The video-range model needs the opposite: G2D's full-range grey compressed to video range on the way in.
+elif args.range == "video" and scaler_choice == "g2d":
+	appsink.connect("new-sample", track_activity(
+		lambda sink: technique.on_new_sample(FullRangeSink(sink, FULL_TO_VIDEO))))
 else:
 	appsink.connect("new-sample", track_activity(technique.on_new_sample))
 # appsink delivers its first frame twice: once as the preroll sample, then again as the first

@@ -16,7 +16,9 @@
 #
 # Usage: start the sender on the Pi with the lossy video (./run_sender.sh --video sintel_trailer-480p-12fps.mp4)
 # and the relay on the iMX8 as usual (run_relay.sh; it doubles the frame rate, 12 -> 24 fps), then
-#   python3 demo_viewer.py [--host 172.20.10.10] [--port 5001]
+#   python3 demo_viewer.py [--host 172.20.10.10] [--port 5001] [--res 480p|256p]
+# 256p (simplest pipeline): the Pi sends sintel_trailer-256p-12fps.mp4, already the model's 448x256, and the relay
+# runs with --scaler cpu --range video: no scaling and no colour conversion, just copies around the model.
 # and press Connect (or pass --connect). The relay exits when the video ends, so restart it before pressing Connect again.
 
 import argparse
@@ -29,8 +31,9 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gst, Gtk
 
 VIDEOS = Path(__file__).resolve().parent.parent.parent / "videos"
-ORIGINAL = VIDEOS / "sintel_trailer-480p.mp4"
-LOSSY = VIDEOS / "sintel_trailer-480p-12fps.mp4"  # make_lossy_video.sh
+# Original and lossy (make_lossy_video.sh) per --res; 256p is already the model's 448x256, so the relay doesn't scale.
+VIDEO_FILES = {res: (VIDEOS / f"sintel_trailer-{res}.mp4", VIDEOS / f"sintel_trailer-{res}-12fps.mp4")
+               for res in ("480p", "256p")}
 SIZE = "video/x-raw,width=448,height=256"
 
 
@@ -96,13 +99,14 @@ class Side:
 
 
 class DemoWindow(Gtk.Window):
-	def __init__(self, host, port, scale):
+	def __init__(self, host, port, scale, res):
 		super().__init__(title="VFI demo: recovering lost frames, 12 -> 24 fps")
 		self.connect("destroy", self.quit)
 		self.lossy = Side("Lossy: every other frame dropped (12 fps)", scale)
 		self.original = Side("Original (24 fps)", scale)
 		self.processed = Side("Recovered by VFI: 12 -> 24 fps (Pi -> iMX8 -> VM)", scale)
 		self.sides = [self.lossy, self.original, self.processed]
+		self.original_video, self.lossy_video = VIDEO_FILES[res]
 
 		# Add buttons to GUI
 		self.host = Gtk.Entry(text=host, width_chars=15)
@@ -142,8 +146,8 @@ class DemoWindow(Gtk.Window):
 
 	def on_connect(self, button):
 		self.stop_all()
-		if not LOSSY.exists():
-			self.status.set_text(f"{LOSSY.name} not found: run ./make_lossy_video.sh first.")
+		if not self.lossy_video.exists():
+			self.status.set_text(f"{self.lossy_video.name} not found: run ./make_lossy_video.sh first.")
 			return
 		host, port = self.host.get_text().strip(), int(self.port.get_value())
 		self.status.set_text(f"Connecting to {host}:{port}, waiting for the first frame...")
@@ -154,7 +158,7 @@ class DemoWindow(Gtk.Window):
 	def start_local(self):
 		# The VM's own copies of the lossy and original videos, started together with the first processed frame.
 		grey = "" if self.colour.get_active() else "videoconvert ! video/x-raw,format=GRAY8 ! "
-		for side, video in ((self.lossy, LOSSY), (self.original, ORIGINAL)):
+		for side, video in ((self.lossy, self.lossy_video), (self.original, self.original_video)):
 			side.start(f"filesrc location={video} ! qtdemux ! h264parse ! avdec_h264 ! videoscale ! {SIZE} ! "
 			           f"{grey}videoconvert ! gtksink name=sink sync=true")
 		self.status.set_text("Playing.")
@@ -181,10 +185,12 @@ def main():
 	parser.add_argument("--host", default="172.20.10.10", help="iMX8's IP address")
 	parser.add_argument("--port", type=int, default=5001, help="relay's listen port")
 	parser.add_argument("--scale", type=float, default=1.4, help="size of each panel, x 448x256 (window can be enlarged)")
+	parser.add_argument("--res", choices=VIDEO_FILES, default="480p",
+	                    help="the videos the Pi sends: 480p, or 256p (already 448x256, for the no-scaler relay)")
 	parser.add_argument("--connect", action="store_true", help="connect straight away")
 	args = parser.parse_args()
 	Gst.init(None)
-	window = DemoWindow(args.host, args.port, args.scale)
+	window = DemoWindow(args.host, args.port, args.scale, args.res)
 	window.show_all()
 	if args.connect:
 		window.on_connect(None)
