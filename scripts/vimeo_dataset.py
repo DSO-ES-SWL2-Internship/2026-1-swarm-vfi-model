@@ -88,15 +88,30 @@ def _load_triplet_grayscale(rel_path):
     return _load_gray(f0_path), _load_gray(f1_path), _load_gray(f2_path)
 
 
-def make_dataset(manifest_name, batch_size=8, shuffle=True):
+def to_video_range(full):
+    """Full-range grey (0-1 for 0-255) -> video-range grey (16-235, as 0-1): what the H.264 stream's luma plane
+    holds, so a model trained on it can take the decoded Y plane without any range conversion."""
+    return (16 + 219 * full) / 255
+
+
+def to_full_range(video):
+    """Inverse of to_video_range: video-range grey (0-1 for 0-255) -> full range."""
+    return (255 * video - 16) / 219
+
+
+def make_dataset(manifest_name, batch_size=8, shuffle=True, video_range=False, repeat=True):
     """Builds a tf.data.Dataset yielding (x, y) like the synthetic pipeline:
     x = concat(frame0, frame2), shape (H, W, 2); y = frame1 (ground truth), shape (H, W, 1).
+    video_range: frames in video range (16-235) instead of full range (0-255), for the video-range model.
+    repeat=False goes through the manifest once (evaluation); training repeats it for every epoch.
     Small enough (640 train triplets) to cache in memory after the first pass."""
     triplets = load_manifest(manifest_name)
 
     def generator():
         for rel_path in triplets:
             f0, f1, f2 = _load_triplet_grayscale(rel_path)
+            if video_range:
+                f0, f1, f2 = to_video_range(f0), to_video_range(f1), to_video_range(f2)
             x = np.concatenate([f0, f2], axis=-1)
             yield x, f1
 
@@ -110,7 +125,9 @@ def make_dataset(manifest_name, batch_size=8, shuffle=True):
     ds = ds.cache()
     if shuffle:
         ds = ds.shuffle(buffer_size=len(triplets))
-    return ds.repeat().batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    if repeat:
+        ds = ds.repeat()
+    return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
 
 if __name__ == "__main__":

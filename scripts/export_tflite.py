@@ -3,6 +3,9 @@
 # quantization (not just weights) is required — the NPU silently falls back
 # to CPU for float ops, so both input and output tensors are quantized too.
 
+import argparse
+from pathlib import Path
+
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2
@@ -19,24 +22,36 @@ REP_DATASET_SIZE = 100  # samples used to calibrate activation quantization rang
 PER_TENSOR = True
 
 def main():
-  convert()
-  fp32_size = training.MODEL_PATH.stat().st_size
-  int8_size = training.TFLITE_MODEL_PATH.stat().st_size
-  print(f"saved {training.TFLITE_MODEL_PATH} ({int8_size / 1024:.0f} KB, "
+  parser = argparse.ArgumentParser(description="INT8 TFLite export of the toy U-Net for the NPU")
+  parser.add_argument("--model", type=Path, default=training.MODEL_PATH, help="trained .keras model")
+  parser.add_argument("--out", type=Path, default=training.TFLITE_MODEL_PATH, help="where to save the .tflite")
+  parser.add_argument("--range", choices=["full", "video"], default="full",
+                      help="grey range the model was trained on (training.py --range); calibration data must match")
+  args = parser.parse_args()
+  convert(args.model, args.out, args.range == "video")
+  fp32_size = args.model.stat().st_size
+  int8_size = args.out.stat().st_size
+  print(f"saved {args.out} ({int8_size / 1024:.0f} KB, "
         f"vs {fp32_size / 1024:.0f} KB fp32 .keras — {fp32_size / int8_size:.1f}x smaller)\n")
-  sanity_check()
+  sanity_check(args.out, args.range == "video")
 
 
 # Create a randomly-selected representative dataset
-def representative_dataset_gen():
-  ds = vimeo_dataset.make_dataset("train.txt", batch_size=1, shuffle=True)
-  for x, _ in ds.take(REP_DATASET_SIZE):
+def representative_dataset_gen(video_range=False):
+  ds = vimeo_dataset.make_dataset("train.txt", batch_size=1, shuffle=True, video_range=video_range)
+  for i, (x, _) in enumerate(ds.take(REP_DATASET_SIZE)):
+    if video_range and i == 0:
+      # Video-range frames only span 16-235, which would calibrate the input scale to that span. One pixel at 0
+      # and one at 1 keep the input range at 0-1 (scale 1/255), as for the full-range model, so the relay can
+      # still feed uint8 pixels with a zero-point shift alone.
+      x = x.numpy()
+      x[0, 0, 0, :], x[0, 0, 1, :] = 0.0, 1.0
     yield [x]
 
 
 # Convert FP32 model to INT8 (for deployment on iMX8)
-def convert():
-  model = interpolate.load_model()
+def convert(model_path=training.MODEL_PATH, out_path=training.TFLITE_MODEL_PATH, video_range=False):
+  model = interpolate.load_model(model_path)
 
   # from_concrete_functions with an explicit batch-size-1 TensorSpec (not from_keras_model,
   # which would preserve the model's own dynamic/None batch dimension) -- every real consumer
@@ -58,7 +73,7 @@ def convert():
   frozen_func = convert_variables_to_constants_v2(concrete_func)
   converter = tf.lite.TFLiteConverter.from_concrete_functions([frozen_func], model)
   converter.optimizations = [tf.lite.Optimize.DEFAULT]
-  converter.representative_dataset = representative_dataset_gen
+  converter.representative_dataset = lambda: representative_dataset_gen(video_range)
   converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
   converter.inference_input_type = tf.int8
   converter.inference_output_type = tf.int8
@@ -67,12 +82,12 @@ def convert():
   tflite_model = converter.convert()
 
   training.ARTIFACTS_DIR.mkdir(exist_ok=True)
-  training.TFLITE_MODEL_PATH.write_bytes(tflite_model)
+  out_path.write_bytes(tflite_model)
 
 
 # Runs one real example to sanity check for proper inference
-def sanity_check():
-  interpreter = tf.lite.Interpreter(model_path=str(training.TFLITE_MODEL_PATH))
+def sanity_check(path=training.TFLITE_MODEL_PATH, video_range=False):
+  interpreter = tf.lite.Interpreter(model_path=str(path))
   interpreter.allocate_tensors()
   input_details = interpreter.get_input_details()[0]
   output_details = interpreter.get_output_details()[0]
@@ -83,7 +98,7 @@ def sanity_check():
         f"quantization(scale, zero_point)={output_details['quantization']}")
 
   # Run one real example through, to confirm output isn't degenerate (all-zero/saturated).
-  ds = vimeo_dataset.make_dataset("eval.txt", batch_size=1, shuffle=False)
+  ds = vimeo_dataset.make_dataset("eval.txt", batch_size=1, shuffle=False, video_range=video_range)
   x, y = next(iter(ds.take(1)))
 
   in_scale, in_zero_point = input_details["quantization"]

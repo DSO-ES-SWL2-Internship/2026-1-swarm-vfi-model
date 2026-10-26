@@ -33,17 +33,27 @@ def parse_args():
         "--data", choices=["synthetic", "vimeo"], default="vimeo",
         help="synthetic: moving-circle generator. vimeo: real Vimeo-90K subset (see vimeo_dataset.py)",
     )
+    parser.add_argument(
+        "--range", choices=["full", "video"], default="full",
+        help="grey range of the Vimeo frames: full (0-255, PIL's convert('L'); the deployed model) or video "
+             "(16-235, like the H.264 stream's luma plane, so the relay needs no range conversion)",
+    )
+    parser.add_argument("--seed", type=int, help="fixes weight init and data order, for comparable runs")
+    parser.add_argument("--out", type=Path, default=MODEL_PATH, help="where to save the .keras model")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    if args.seed is not None:
+        keras.utils.set_random_seed(args.seed)
 
     # Dataset
     if args.data == "vimeo":
         import vimeo_dataset
-        train_ds = vimeo_dataset.make_dataset("train.txt", batch_size=8)
-        val_ds = vimeo_dataset.make_dataset("val.txt", batch_size=8, shuffle=False)
+        video = args.range == "video"
+        train_ds = vimeo_dataset.make_dataset("train.txt", batch_size=8, video_range=video)
+        val_ds = vimeo_dataset.make_dataset("val.txt", batch_size=8, shuffle=False, video_range=video)
         loss_fn = charbonnier_loss  # weighted_mae is tuned for the synthetic bright-circle data only
         steps_per_epoch = max(1, len(vimeo_dataset.load_manifest("train.txt")) // 8)
         validation_steps = max(1, len(vimeo_dataset.load_manifest("val.txt")) // 8)
@@ -70,12 +80,14 @@ def main():
 
     # Save and export model, and sample image
     ARTIFACTS_DIR.mkdir(exist_ok=True)
-    model.save(MODEL_PATH)
+    model.save(args.out)
+    print(f"saved {args.out}")
 
     for x_batch, _ in val_ds.take(1):
         pred = model.predict(x_batch[:1], verbose=0)
         pred_img = (pred[0, ..., 0] * 255).clip(0, 255).astype(np.uint8)
-        Image.fromarray(pred_img, mode="L").save(SAMPLE_PREDICTION_PATH)
+        sample_path = SAMPLE_PREDICTION_PATH if args.out == MODEL_PATH else args.out.with_name(args.out.stem + "_sample.png")
+        Image.fromarray(pred_img, mode="L").save(sample_path)
 
 # Draws a circle on a 2D array representing an image
 def render_circle(cx, cy, img_h=IMG_HEIGHT, img_w=IMG_WIDTH, radius=RADIUS):

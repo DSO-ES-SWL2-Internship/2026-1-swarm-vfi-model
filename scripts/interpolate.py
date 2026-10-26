@@ -35,9 +35,9 @@ def linear_blend(frame0_img, frame2_img):
     return blended
 
 
-def load_model():
+def load_model(path=training.MODEL_PATH):
     return keras.models.load_model(
-        training.MODEL_PATH,
+        path,
         custom_objects={"weighted_mae": training.weighted_mae, "charbonnier_loss": training.charbonnier_loss},
     )
 
