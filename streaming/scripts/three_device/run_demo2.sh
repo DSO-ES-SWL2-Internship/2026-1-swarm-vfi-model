@@ -4,8 +4,8 @@
 # (press 1 for one row per core).
 #   ./run_demo2.sh cpu   everything on the CPU: decode, scale, colour conversion, the model (4 threads), encode (MPEG-4).
 #                        The CPU cannot keep up, so the video on the VM lags and all four cores are busy.
-#   ./run_demo2.sh hw    the default path: VPU decode, G2D scale, model on the NPU, VPU encode. Smooth, at about
-#                        80% of one core.
+#   ./run_demo2.sh hw    the default path: VPU decode, CPU scale, model on the NPU, VPU encode (CPU time measured with
+#                        the G2D scaler before; --scaler g2d still gives that path).
 # For each run: start this, then the sender on the Pi (run_sender.sh), then Connect in demo_viewer.py on the VM.
 # The relay stops when the video ends and prints its CPU time and inference latency. Output: /tmp/demo2_<mode>.log.
 #

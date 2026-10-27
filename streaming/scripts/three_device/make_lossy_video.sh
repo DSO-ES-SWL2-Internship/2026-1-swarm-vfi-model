@@ -8,8 +8,7 @@
 # are re-encoded (dropping frames breaks the H.264 references), at high quality so the re-encoding barely shows.
 #
 # 256p: the 480p trailer scaled to the model's own size, 448x256, at 24 fps and at 12 fps. With the source at
-# model size the relay needs no scaler (--scaler cpu is then a passthrough), and with the video-range model
-# (--range video) no colour conversion either: the decoder's luma plane goes straight to the model.
+# model size the relay's CPU scaler is a passthrough: the decoder's luma plane goes straight to the model.
 #
 # Run on the VM (needs x264enc), then copy the output(s) to the Pi's videos folder too:
 #   ./make_lossy_video.sh [480p]   -> ../../videos/sintel_trailer-480p-12fps.mp4

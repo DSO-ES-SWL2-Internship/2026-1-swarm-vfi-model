@@ -17,8 +17,7 @@
 # Usage: start the sender on the Pi with the lossy video (./run_sender.sh --video sintel_trailer-480p-12fps.mp4)
 # and the relay on the iMX8 as usual (run_relay.sh; it doubles the frame rate, 12 -> 24 fps), then
 #   python3 demo_viewer.py [--host 172.20.10.10] [--port 5001] [--res 480p|256p]
-# 256p (simplest pipeline): the Pi sends sintel_trailer-256p-12fps.mp4, already the model's 448x256, and the relay
-# runs with --scaler cpu --range video: no scaling and no colour conversion, just copies around the model.
+# 256p: the Pi sends sintel_trailer-256p-12fps.mp4, already the model's 448x256, so the relay's scaler has nothing to do.
 # and press Connect (or pass --connect). The relay exits when the video ends, so restart it before pressing Connect again.
 
 import argparse
