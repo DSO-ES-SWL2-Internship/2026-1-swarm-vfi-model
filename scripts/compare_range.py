@@ -1,14 +1,15 @@
 # Is a U-Net trained on video-range grey (16-235, training.py --range video) as good as the full-range one (0-255,
-# deployed)? With the video-range model the relay needs no range lookups (relay.py --range video), which cost
-# about 3 ms each on the board.
+# deployed when this was written)? With the video-range model the relay needs no range lookups, which cost about
+# 3 ms each on the board. It was adopted: relay.py now runs the video-range model only (the full-range relay with
+# its lookups is at git tag before-simplify).
 #
 # Two comparisons on the same held-out Vimeo triplets (eval + val, each once; neither is used for training):
 #   fp32      the Keras models, in floating point. The video model's output is mapped back to full range, so both
 #             are scored on the same 0-1 scale (scoring in video range would add 20*log10(255/219) = 1.3 dB).
 #   pipeline  the INT8 TFLite models the NPU runs, with every step of the relay emulated in uint8:
 #             the stream's luma is video range, so the input is round(video-range frame);
-#             full model   --range lut:   VIDEO_TO_FULL lookup -> model -> FULL_TO_VIDEO lookup
-#             video model  --range video: model directly (CPU-scaler chain)
+#             full model   the old relay's lut mode: VIDEO_TO_FULL lookup -> model -> FULL_TO_VIDEO lookup
+#             video model  the relay now: model directly
 #             Both outputs are video-range uint8, scored against the video-range ground truth (data range 219).
 # Each range is trained with the same seeds, so the run-to-run spread shows how big a difference has to be to
 # matter. Paired differences (video minus full, same triplet, same seed) are reported for the pipeline scores.

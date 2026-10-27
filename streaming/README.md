@@ -1,49 +1,56 @@
-# Streaming setup
+# Streaming
 
-VFI (video frame interpolation) demo pipeline over the network, in two topologies.
-
-## 2-device: Pi ↔ VM
-
-Pi sends raw video; VM decodes, runs VFI, and writes the result to a file.
+VFI (video frame interpolation) over the network, across three devices: the Pi sends a video, the iMX8 relay
+decodes it, runs VFI on every pair of frames on the NPU and re-encodes the result, and the VM shows or saves it.
 
 ```
-# On the Pi:
-python scripts/two_device/sender.py --host 0.0.0.0 --port 5000
-
-# On the VM:
-python scripts/two_device/receiver.py --host <pi-ip> --port 5000 toy_unet_onnx
+Pi (sender.py) --TCP, H.264 in MPEG-TS--> iMX8 (relay.py) --TCP, H.264 in MPEG-TS--> VM (demo_viewer.py or receiver.py)
 ```
 
-## 3-device: Pi → iMX8 → VM
+Videos live in `videos/` (not tracked by git; copy them to each device).
 
-Pi sends raw video; iMX8 decodes, runs VFI (NPU-accelerated), and re-encodes onward; VM just
-remuxes the already-interpolated stream to a file (no VFI, no decode, no re-encode).
+## Running the demo
+
+The Pi sends the trailer with every other frame dropped (12 fps, made by `scripts/make_lossy_video.sh`); the relay
+doubles it back to 24 fps; `demo_viewer.py` shows the lossy, original and recovered videos side by side.
+
+Start them in this order (the relay waits for the VM before connecting to the Pi). The sender and the relay exit
+when the video ends, so restart both before each run.
 
 ```
-# On the Pi:
-python scripts/three_device/sender.py --host 0.0.0.0 --port 5000
-
-# On the iMX8:
-python scripts/three_device/relay.py --host <pi-ip> --port 5000 \
-    --listen-host 0.0.0.0 --listen-port 5001 toy_unet_onnx
-
-# On the VM:
-python scripts/three_device/receiver.py --host <imx8-ip> --port 5001
+# Pi
+scripts/run_sender.sh            # sends videos/sintel_trailer-480p-12fps.mp4 by default
+# iMX8
+scripts/run_relay.sh             # PI_HOST=<ip> to override the Pi's address
+# VM: press Connect
+python3 scripts/demo_viewer.py   # --host <iMX8's ip>
 ```
 
-`sender.py` is identical in both folders (the Pi's role never changes) — duplicated rather
-than shared so each folder is self-contained; keep both copies in sync if either changes.
+For the hardware acceleration demo, run `scripts/run_demo2.sh cpu` (everything on the CPU) or
+`scripts/run_demo2.sh hw` (VPU decode, GPU scale, NPU, VPU encode) on the iMX8 instead of `run_relay.sh`.
+To save the relayed stream to a file instead of viewing it, run `scripts/run_receiver.sh` on the VM.
 
-Output video lands in `videos/received_<technique>.mp4` (2-device) or `videos/received_3hop.mp4`
-(3-device) by default — override with `--output <path>`.
+## scripts/
 
-## Other scripts
+| Script | Runs on | What it does |
+| --- | --- | --- |
+| `sender.py`, `run_sender.sh` | Pi | Waits for the relay to connect, then streams a video file |
+| `relay.py`, `run_relay.sh` | iMX8 | Decode, scale to 448x256 grey, VFI, re-encode, serve to the VM; `--input FILE --output fake` runs it from a local file, flat out |
+| `run_demo2.sh cpu\|hw` | iMX8 | The relay all on the CPU, or on the accelerators |
+| `demo_viewer.py` | VM | Three-panel window: lossy 12 fps, original 24 fps, recovered 24 fps |
+| `receiver.py`, `run_receiver.sh` | VM | Saves the relayed stream to `videos/received_3hop.mp4` |
+| `make_lossy_video.sh` | VM | Makes the 12 fps videos (needs x264enc) |
 
-- `scripts/standalone_inference.py` — bare model+NPU test, no GStreamer/network involved. See
-  its `--help` for usage.
+## scripts/test/ (benchmarks and checks, mostly on the iMX8)
 
-## Known issues
-
-- `sender.py`'s `mpegtsmux`+`tcpserversink` chain reliably truncates ~5% of frames near the end
-  of a stream (deterministic, not timing-related — confirmed across multiple property tweaks).
-  Root cause not yet found; not blocking, but worth knowing before trusting output completeness.
+| Script | What it does |
+| --- | --- |
+| `relay_bench.py` | The relay with the model, one offload at a time, without and with queues -> `outputs/relay_bench/` |
+| `pipeline_bench.py` | decode -> scale -> encode on CPU / VPU / G2D, without and with queues, with per-step predictions |
+| `ocl_check.py` | GPU (OpenCL) scaler vs G2D and CPU: speed and correctness |
+| `codec_suite.py`, `plot_codec_suite.py`, `plot_utilisation.py` | Codec and scaler combinations at each resolution: speed, CPU time, utilisation (plots on the VM) |
+| `trace_buffers.py`, `scaler_tlb.py` | Frame memory per hand-over between units; why the CPU scaler is slower on VPU frames |
+| `test_g2d_colour.sh` | Which colorimetry setting gives the right grey on the G2D path |
+| `hw_monitor.py` | Live CPU / GPU / NPU / VPU load, beside any pipeline |
+| `nnshark_demo.sh` | The relay's video path under NXP's nnshark live profiler |
+| `compare_videos.sh` | Plays an original and a received video side by side |

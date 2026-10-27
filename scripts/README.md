@@ -23,6 +23,7 @@ so run them from this folder: `python3 <script>.py`.
 | `eval.py` | PSNR / SSIM / LPIPS over `interpolate.py`'s outputs, plus box plots | `artifacts/metrics_boxplot.png` |
 | `visual_grid.py` | Side-by-side picture of each technique on one example | `artifacts/visual_grid_<source>.png` |
 | `compare_quantization.py` | fp32 vs INT8 per-channel vs INT8 per-tensor accuracy on the same eval triplets | printed table |
+| `compare_range.py` | Video-range (16-235) vs full-range model accuracy, fp32 and INT8 as the relay runs them | printed table |
 
 Re-run `compare_quantization.py` (accuracy) and `benchmarks/benchmark_backends.sh` (speed) whenever the
 model or its export settings change.

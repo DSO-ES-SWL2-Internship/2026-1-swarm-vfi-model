@@ -1,8 +1,5 @@
-# Identical to ../two_device/sender.py -- the Pi's role doesn't change between the 2-device
-# and 3-device topologies, it just gets pointed at a different --host (the iMX8 instead of the
-# VM directly). Duplicated rather than shared/symlinked so this folder is fully self-contained
-# (a symlink risks silently breaking on `scp -r`, which doesn't follow symlinks by default).
-# Keep in sync with ../two_device/sender.py if either changes.
+# Pi side of the 3-device setup: listens for the iMX8 relay to connect, then streams a video file from
+# streaming/videos over TCP (H.264 in MPEG-TS, as stored, without re-encoding).
 
 import argparse
 import threading
@@ -13,7 +10,7 @@ gi.require_version("Gst", "1.0")
 from gi.repository import Gst
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-VIDEOS_DIR = SCRIPT_DIR.parent.parent / "videos"
+VIDEOS_DIR = SCRIPT_DIR.parent / "videos"
 
 DEFAULT_VIDEO = "sintel_trailer-480p-12fps.mp4"
 
@@ -50,7 +47,7 @@ parser_args.add_argument("--host", default="0.0.0.0", help="address to listen on
 parser_args.add_argument("--port", type=int, default=5000)
 parser_args.add_argument("--video", default=DEFAULT_VIDEO,
                          help="file in streaming/videos to send, e.g. sintel_trailer-480p-12fps.mp4 "
-                              "(made by three_device/make_lossy_video.sh) for the 12 -> 24 fps demo")
+                              "(made by make_lossy_video.sh) for the 12 -> 24 fps demo")
 args = parser_args.parse_args()
 
 # TCP variant: swaps rtph264pay/udpsink for mpegtsmux/tcpserversink. RTP's

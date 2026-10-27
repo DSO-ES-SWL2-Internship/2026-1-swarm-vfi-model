@@ -4,14 +4,13 @@
 # (press 1 for one row per core).
 #   ./run_demo2.sh cpu   everything on the CPU: decode, scale, colour conversion, the model (4 threads), encode (MPEG-4).
 #                        The CPU cannot keep up, so the video on the VM lags and all four cores are busy.
-#   ./run_demo2.sh hw    the default path: VPU decode, GPU scale (OCL), model on the NPU, VPU encode (CPU time
-#                        measured with the G2D scaler before; --scaler g2d still gives that path).
+#   ./run_demo2.sh hw    the default path: VPU decode, GPU scale (OCL), model on the NPU, VPU encode.
 # For each run: start this, then the sender on the Pi (run_sender.sh), then Connect in demo_viewer.py on the VM.
 # The relay stops when the video ends and prints its CPU time and inference latency. Output: /tmp/demo2_<mode>.log.
 #
 # Not under nnshark: its live tracer cuts the relay's TCP stream to the VM after the first frame (tested 19 Oct 2026).
-# For nnshark's view of the accelerators (per-element time, NPU load), run ../test/nnshark_demo.sh --npu separately:
-# the same hardware path (VPU decode, G2D scale, VPU encode, the model on the NPU), without the network.
+# For nnshark's view of the accelerators (per-element time, NPU load), run test/nnshark_demo.sh --npu separately:
+# the same hardware path (VPU decode, GPU scale, VPU encode, the model on the NPU), without the network.
 set -euo pipefail
 cd "$(dirname "$0")"
 export PYTHONUNBUFFERED=1

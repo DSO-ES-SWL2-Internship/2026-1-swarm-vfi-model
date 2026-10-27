@@ -36,8 +36,8 @@ from gi.repository import GLib, Gst, GstApp
 import numpy as np
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-VIDEOS_DIR = SCRIPT_DIR.parent.parent / "videos"  # streaming/videos
-MODELS_DIR = SCRIPT_DIR.parent.parent.parent / "artifacts"  # machine-learning/artifacts -- three levels up
+VIDEOS_DIR = SCRIPT_DIR.parent / "videos"  # streaming/videos
+MODELS_DIR = SCRIPT_DIR.parent.parent / "artifacts"  # machine-learning/artifacts
 
 # The U-Net trained on video-range grey (scripts/training.py --range video): the decoder's luma plane is video range
 # (16-235), so frames go to the model and back to the encoder without any range conversion. Same accuracy as the

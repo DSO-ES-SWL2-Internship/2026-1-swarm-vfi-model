@@ -7,11 +7,11 @@ gi.require_version("Gst", "1.0")
 from gi.repository import Gst
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-VIDEOS_DIR = SCRIPT_DIR.parent.parent / "videos"  # streaming/videos -- two levels up
+VIDEOS_DIR = SCRIPT_DIR.parent / "videos"  # streaming/videos
 
 Gst.init(None)
 
-# This is the VM's role in the 3-device topology -- unlike two_device/receiver.py, it does no
+# This is the VM's role in the 3-device topology -- it does no
 # VFI and never touches raw pixels at all: it just receives the iMX8's already-interpolated,
 # already-encoded stream and remuxes it from TS (network-transport container) into MP4 (a
 # seekable file container) for later playback/comparison. No decode, no appsrc/appsink Python
@@ -105,7 +105,7 @@ demuxer.connect("pad-added", on_pad_added, muxer)
 tcpclientsrc.set_property("host", args.host)
 tcpclientsrc.set_property("port", args.port)
 # sync=False -- no live viewer, and pacing to real-time pts would make the first-frame/
-# last-frame throughput measurement below meaningless, same reasoning as two_device/receiver.py.
+# last-frame throughput measurement below meaningless.
 filesink.set_property("sync", False)
 filesink.set_property("location", output_path)
 

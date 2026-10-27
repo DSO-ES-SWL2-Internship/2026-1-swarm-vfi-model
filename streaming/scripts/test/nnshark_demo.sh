@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Live utilisation demo with nnshark (NXP's GStreamer profiler): plays the relay's video path in real time
-# (VPU decode -> G2D scale to 448x256 -> VPU encode) under nnshark's "live" view, which shows CPU load per
-# core, 3D GPU / NPU / G2D load, DDR traffic and each element's time per frame. Run on the iMX8, over SSH
+# (VPU decode -> GPU (OpenCL) scale to 448x256 -> VPU encode) under nnshark's "live" view, which shows CPU load
+# per core, 3D GPU / NPU / G2D load, DDR traffic and each element's time per frame. Run on the iMX8, over SSH
 # (the view doesn't refresh well on the serial console). Press q to quit.
 # Usage: ./nnshark_demo.sh [--npu] [480p|720p|1080p]   (default 1080p)
 #   --npu  also runs the U-Net on the NPU in the background (benchmark_model), so the NPU load shows too: one
@@ -25,7 +25,7 @@ for arg in "$@"; do
 done
 
 VIDEO="../../videos/sintel_trailer-$RES.mp4"
-MODEL="../../../artifacts/toy_unet_int8.tflite"
+MODEL="../../../artifacts/toy_unet_int8_video.tflite"
 BENCHMARK=/usr/bin/tensorflow-lite-2.19.0/examples/benchmark_model
 DELEGATE=/usr/lib/libvx_delegate.so
 
@@ -73,5 +73,5 @@ echo "Starting nnshark ($RES, real time, ~52 s). Arrow keys move around, q quits
 sleep 2
 GST_DEBUG="GST_TRACER:7" GST_TRACERS="live" gst-launch-1.0 -q \
 	filesrc location="$VIDEO" ! qtdemux ! h264parse ! vpudec frame-drop=false ! \
-	imxvideoconvert_g2d ! video/x-raw,width=448,height=256 ! \
+	imxvideoconvert_ocl ! video/x-raw,format=NV12,width=448,height=256 ! \
 	vpuenc_h264 bitrate=2000 ! fakesink sync=true

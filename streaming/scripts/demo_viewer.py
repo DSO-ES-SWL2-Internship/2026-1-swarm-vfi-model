@@ -12,7 +12,7 @@
 # The recovered side shows frames as they arrive; the fps counters show 12 vs 24.
 #
 # The lossy video is made beforehand (not dropped live, which would add load and timing jitter):
-# ./make_lossy_video.sh makes ../../videos/sintel_trailer-480p-12fps.mp4; copy it to the Pi's videos folder too.
+# ./make_lossy_video.sh makes ../videos/sintel_trailer-480p-12fps.mp4; copy it to the Pi's videos folder too.
 #
 # Usage: start the sender on the Pi with the lossy video (./run_sender.sh --video sintel_trailer-480p-12fps.mp4)
 # and the relay on the iMX8 as usual (run_relay.sh; it doubles the frame rate, 12 -> 24 fps), then
@@ -29,7 +29,7 @@ gi.require_version("Gst", "1.0")
 gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gst, Gtk
 
-VIDEOS = Path(__file__).resolve().parent.parent.parent / "videos"
+VIDEOS = Path(__file__).resolve().parent.parent / "videos"
 # Original and lossy (make_lossy_video.sh) per --res; 256p is already the model's 448x256, so the relay doesn't scale.
 VIDEO_FILES = {res: (VIDEOS / f"sintel_trailer-{res}.mp4", VIDEOS / f"sintel_trailer-{res}-12fps.mp4")
                for res in ("480p", "256p")}

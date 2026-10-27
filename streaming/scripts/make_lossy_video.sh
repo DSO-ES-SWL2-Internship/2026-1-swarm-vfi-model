@@ -11,13 +11,13 @@
 # model size the relay's scaler has nothing to resize: the decoder's luma plane goes straight to the model.
 #
 # Run on the VM (needs x264enc), then copy the output(s) to the Pi's videos folder too:
-#   ./make_lossy_video.sh [480p]   -> ../../videos/sintel_trailer-480p-12fps.mp4
-#   ./make_lossy_video.sh 256p     -> ../../videos/sintel_trailer-256p.mp4 and sintel_trailer-256p-12fps.mp4
+#   ./make_lossy_video.sh [480p]   -> ../videos/sintel_trailer-480p-12fps.mp4
+#   ./make_lossy_video.sh 256p     -> ../videos/sintel_trailer-256p.mp4 and sintel_trailer-256p-12fps.mp4
 set -euo pipefail
 cd "$(dirname "$0")"
 
 RES="${1:-480p}"
-VIDEOS=../../videos
+VIDEOS=../videos
 ENCODE="x264enc pass=quant quantizer=16 speed-preset=medium key-int-max=12 ! video/x-h264,profile=high ! h264parse ! mp4mux"
 
 if [ "$RES" = 256p ]; then

@@ -38,7 +38,7 @@ from pathlib import Path
 
 from pipeline_bench import DECODE, VIDEOS, run
 
-RELAY = Path(__file__).resolve().parent.parent / "three_device" / "relay.py"
+RELAY = Path(__file__).resolve().parent.parent / "relay.py"
 OUT = Path(__file__).resolve().parent.parent.parent.parent / "outputs" / "relay_bench"
 VIDEO = "sintel_trailer-480p-12fps.mp4"
 OUTPUT_PER_INPUT = 2  # toy_unet_tflite doubles the frame rate
