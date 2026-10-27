@@ -15,7 +15,7 @@ from gi.repository import Gst
 SCRIPT_DIR = Path(__file__).resolve().parent
 VIDEOS_DIR = SCRIPT_DIR.parent.parent / "videos"
 
-DEFAULT_VIDEO = "sintel_trailer-480p.mp4"
+DEFAULT_VIDEO = "sintel_trailer-480p-12fps.mp4"
 
 Gst.init(None)
 
