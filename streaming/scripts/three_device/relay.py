@@ -81,8 +81,8 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument("--decoder", choices=["auto", "cpu", "vpu"], default="auto",
 	                    help="H.264 decoder: auto = vpu (hardware) if installed, else cpu (avdec_h264)")
 	parser.add_argument("--scaler", choices=["auto", "cpu", "ocl", "g2d"], default="auto",
-	                    help="scale to the model's 448x256 on: cpu (videoscale, the default), ocl (GPU) or g2d "
-	                         "(see SCALERS)")
+	                    help="scale to the model's 448x256 on: ocl (GPU), cpu (videoscale) or g2d (see SCALERS); "
+	                         "auto = ocl after vpudec, else cpu")
 	parser.add_argument("--encoder", choices=["auto", "vpu", "x264", "mpeg4"], default="auto",
 	                    help="re-encode codec: auto = vpu (hardware) if installed, else x264, else mpeg4")
 	parser.add_argument("--inference", choices=["npu", "cpu"], default="npu",
@@ -315,7 +315,7 @@ def make_element(factory: str, name: str) -> Gst.Element | None:
 
 
 # auto prefers the iMX8's hardware decoder (vpudec, VPU), else avdec_h264 (CPU, gst-libav).
-def make_decoder(choice: str) -> Gst.Element | None:
+def make_decoder(choice: str) -> tuple[Gst.Element | None, str]:
 	if choice == "auto":
 		choice = "vpu" if Gst.ElementFactory.find("vpudec") else "cpu"
 	if choice == "vpu":
@@ -326,7 +326,7 @@ def make_decoder(choice: str) -> Gst.Element | None:
 	else:
 		decoder = make_element("avdec_h264", "decoder")
 	print(f"Decoder: {choice}")
-	return decoder
+	return decoder, choice
 
 
 # Decode path, in two stages: the scaler changes the resolution to the model's 448x256 input, then the
@@ -335,11 +335,12 @@ def make_decoder(choice: str) -> Gst.Element | None:
 #
 # The model takes video-range grey (16-235), which is the luma (Y) plane of the decoder's YUV frames. So the scaler
 # should keep YUV, and the input converter then only has to take the Y plane:
-#   cpu  videoscale on the CPU (default). Keeps YUV. Measured cheapest overall at 480p (ocl_check.py): it costs
-#        CPU time to scale, but nothing after it has to undo a format.
-#   ocl  imxvideoconvert_ocl on the GPU (OpenCL): NV12 in, NV12 out. Little CPU, but slower than the G2D.
+#   ocl  imxvideoconvert_ocl on the GPU (OpenCL): NV12 in, NV12 out (default after vpudec). The least CPU in the
+#        whole relay at 480p, and as fast as the others (outputs/relay_scalers: 8.4 ms CPU per relayed frame).
+#   cpu  videoscale on the CPU (default after avdec_h264; OCL is only checked on vpudec's NV12). Keeps YUV, but
+#        12.5 ms CPU per relayed frame after vpudec.
 #   g2d  imxvideoconvert_g2d: the fastest scaler, but it outputs RGB only, so the CPU then converts RGB -> grey
-#        (full range) and looks it up to video range (VideoRangeSink): more CPU in total than the cpu scaler.
+#        (full range) and looks it up to video range (VideoRangeSink): 9.8 ms CPU per relayed frame.
 #
 # vpudec pads its frames to a multiple of 16 (480p: 854 -> 864 columns; 1080p: 1080 -> 1088 rows) and marks the real
 # picture with a crop meta. The G2D and OCL honour it; videoscale doesn't and would scale the padding into the
@@ -376,9 +377,9 @@ def make_bin(description: str, name: str) -> Gst.Bin | None:
 	return element
 
 
-def make_scaler(choice: str) -> tuple[Gst.Bin | None, str]:
+def make_scaler(choice: str, decoder_choice: str) -> tuple[Gst.Bin | None, str]:
 	if choice == "auto":
-		choice = "cpu"
+		choice = "ocl" if decoder_choice == "vpu" and Gst.ElementFactory.find("imxvideoconvert_ocl") else "cpu"
 	print(f"Scaler: {choice}")
 	return make_bin(SCALERS[choice], "scaler"), choice
 
@@ -466,8 +467,8 @@ def build_arm_a(args: argparse.Namespace) -> SimpleNamespace:
 		source.set_property("host", args.host)
 		source.set_property("port", args.port)
 	parser = make_element("h264parse", "parser")
-	decoder = make_decoder(args.decoder)
-	scaler, scaler_choice = make_scaler(args.scaler)
+	decoder, decoder_choice = make_decoder(args.decoder)
+	scaler, scaler_choice = make_scaler(args.scaler, decoder_choice)
 	input_converter = make_input_converter(scaler_choice, args.convert_threads)
 	appsink = make_element("appsink", "appsink")
 	# Queues give the step after them their own thread (--no-queues leaves them out, for comparison).
