@@ -11,7 +11,7 @@ export PYTHONUNBUFFERED=1
 PI_HOST="${PI_HOST:-172.20.10.2}"
 PI_PORT="${PI_PORT:-5000}"
 LISTEN_PORT="${LISTEN_PORT:-5001}"
-TECHNIQUE="${TECHNIQUE:-toy_unet_tflite}"  # NPU path; passthrough | frame_hold | linear_blend | toy_unet_onnx also work
+TECHNIQUE="${TECHNIQUE:-toy_unet_tflite}"  # NPU path; passthrough | frame_hold | linear_blend also work
 IDLE_TIMEOUT="${IDLE_TIMEOUT:-60}"
 
 exec python3 relay.py "$TECHNIQUE" --host "$PI_HOST" --port "$PI_PORT" \
