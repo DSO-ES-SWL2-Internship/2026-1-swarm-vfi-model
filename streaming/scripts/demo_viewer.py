@@ -1,9 +1,9 @@
 # Live demo window for the 3-device setup (runs on the VM, instead of receiver.py): can VFI recover the frames a
-# stream has lost? Three panels, side by side:
+# stream has lost? Three panels, side by side (lossy next to recovered, for the comparison):
 #   Lossy      the trailer with every other frame dropped (12 fps), as the Pi sends it
-#   Original   the trailer as intended (24 fps)
 #   Recovered  the stream the iMX8 sends back after the two hops (Pi -> iMX8 -> VM): the lossy 12 fps with the
 #              dropped frames interpolated by the relay's VFI, so 24 fps again
+#   Original   the trailer as intended (24 fps)
 # A "Show" checkbox per panel hides or shows it; all three are shown at the start.
 #
 # Lossy and Original are the VM's own copies of the videos, shown the way the model sees them -- scaled to
@@ -104,7 +104,7 @@ class DemoWindow(Gtk.Window):
 		self.lossy = Side("Lossy: every other frame dropped (12 fps)", scale)
 		self.original = Side("Original (24 fps)", scale)
 		self.processed = Side("Recovered by VFI: 12 -> 24 fps (Pi -> iMX8 -> VM)", scale)
-		self.sides = [self.lossy, self.original, self.processed]
+		self.sides = [self.lossy, self.processed, self.original]
 		self.original_video, self.lossy_video = VIDEO_FILES[res]
 
 		# Add buttons to GUI
@@ -117,7 +117,7 @@ class DemoWindow(Gtk.Window):
 		stop = Gtk.Button(label="Stop")
 		stop.connect("clicked", lambda button: self.stop_all("Stopped."))
 		shows = []
-		for side, name in zip(self.sides, ("Lossy", "Original", "Recovered")):
+		for side, name in zip(self.sides, ("Lossy", "Recovered", "Original")):
 			show = Gtk.CheckButton(label=name, active=True)
 			show.connect("toggled", self.on_show, side)
 			shows.append(show)
