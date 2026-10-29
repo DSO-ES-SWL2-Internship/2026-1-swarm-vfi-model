@@ -44,8 +44,10 @@ TIMED = 100  # frames timed per hand-over
 def describe(buf):
 	# One line about where this buffer's frame lives.
 	mem = buf.peek_memory(0)
-	kind = mem.allocator.mem_type if mem.allocator else "?"
+	kind = mem.allocator.mem_type if mem.allocator else "?" # Get the allocator for the memory block (e.g. VpuMemory, dmabufheapsmem)
 	ident, heap, phys = "-", "-", "-"
+
+	# Report file descriptor properties for the dmabuf
 	if GstAllocators.is_dmabuf_memory(mem):
 		fd = GstAllocators.dmabuf_memory_get_fd(mem)
 		ident = f"inode {os.fstat(fd).st_ino}"
@@ -54,18 +56,25 @@ def describe(buf):
 			heap = next((l.split(":", 1)[1].strip() for l in fdinfo.splitlines() if l.startswith("exp_name")), "-")
 		except OSError:
 			pass
+
+	# Report physical memory address
 	if GstAllocators.is_phys_memory(mem):
 		phys = f"0x{GstAllocators.phys_memory_get_phys_addr(mem):x}"
 	meta = GstVideo.buffer_get_video_meta(buf)
+
+	# Video frame's layout information (format, dimensions, stride, plane offset)
 	layout = f"{meta.format.value_nick} {meta.width}x{meta.height} stride {list(meta.stride[:meta.n_planes])} " \
 	         f"offset {list(meta.offset[:meta.n_planes])}" if meta else "no video meta"
 	return f"memory {kind:12} {ident:16} heap {heap:20} phys {phys:12} size {buf.get_size():8}  {layout}"
 
 
 def time_reads(buf):
-	# Maps the frame, then copies it into Python twice. bytes() makes exactly one copy either way: info.data is
+	# Maps the frame, then copies it into Python twice.
+	# bytes() makes exactly one copy either way: info.data is
 	# a view of the mapping where gst-python is installed (the board), but an already-copied bytes object
-	# without it (the VM), and bytes() of a bytes object returns it as it is. Returns (map ms, first read MB/s, second read MB/s). Mapping a dmabuf includes the cache
+	# without it (the VM), and bytes() of a bytes object returns it as it is.
+	#
+	# Returns (map ms, first read MB/s, second read MB/s). Mapping a dmabuf includes the cache
 	# maintenance the kernel does before a CPU read.
 	start = time.perf_counter()
 	ok, info = buf.map(Gst.MapFlags.READ)
@@ -112,6 +121,7 @@ def main():
 	payload = bytes(range(256)) * ((8 << 20) // 256)  # 8 MB, more than a 1080p frame
 	ordinary = Gst.Buffer.new_allocate(None, len(payload), None)
 
+	# Instantiates a probe
 	def probe(pad, info, label):
 		buf = info.get_buffer()
 		if shown[label] < SHOW:
@@ -121,6 +131,7 @@ def main():
 			times[label].append((*time_reads(buf), *ordinary_read(buf, ordinary, payload)))
 		return Gst.PadProbeReturn.OK
 
+	# Attaches the probe to a pad
 	for label, element in handovers.items():
 		element.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, probe, label)
 
