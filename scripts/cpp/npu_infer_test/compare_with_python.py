@@ -31,9 +31,9 @@ interp.allocate_tensors()
 inp = interp.get_input_details()[0]
 out = interp.get_output_details()[0]
 print(f"model {args.model} on the {target}")
-print(f"input  {inp['dtype'].__name__} {list(inp['shape'])}, scale {inp['quantization'][0]:.6g}, "
+print(f"input  {inp['dtype'].__name__} {inp['shape'].tolist()}, scale {inp['quantization'][0]:.6g}, "
       f"zero point {inp['quantization'][1]}")
-print(f"output {out['dtype'].__name__} {list(out['shape'])}, scale {out['quantization'][0]:.6g}, "
+print(f"output {out['dtype'].__name__} {out['shape'].tolist()}, scale {out['quantization'][0]:.6g}, "
       f"zero point {out['quantization'][1]}")
 
 # Slide row 2 -- warm up: one inference so the NPU graph is compiled and cached

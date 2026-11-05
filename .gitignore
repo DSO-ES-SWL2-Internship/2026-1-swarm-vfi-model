@@ -4,3 +4,7 @@
 !*.sh
 !*.md
 !*.cpp
+!**/CMakeLists.txt
+
+# CMake build output (Makefiles, cache, binaries)
+build/
