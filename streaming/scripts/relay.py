@@ -27,6 +27,15 @@ from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
+# Preload the TensorFlow fallback before GStreamer initialization.
+# On the i.MX8, use the lightweight standalone TFLite runtime instead.
+try:
+	from tflite_runtime.interpreter import Interpreter, load_delegate
+except ImportError:
+	import tensorflow as tf
+	Interpreter = tf.lite.Interpreter
+	load_delegate = tf.lite.experimental.load_delegate
+
 # GStreamer
 import gi
 gi.require_version("Gst", "1.0")
@@ -241,15 +250,7 @@ class ToyUnetBlenderTFLite(Doubler):
 	def __init__(self, appsrc: GstApp.AppSrc | TimedAppsrc, inference: str = "npu") -> None:
 		super().__init__(appsrc)
 		self.total_infer_time = 0.0
-		self.infer_calls = 0
-
-		# tflite_runtime + vx_delegate exist only on the iMX8; elsewhere (e.g. the VM) fall back to
-		# full TensorFlow's interpreter on CPU, so this technique still runs as a CPU baseline.
-		try:
-			from tflite_runtime.interpreter import Interpreter, load_delegate
-		except ImportError:
-			import tensorflow as tf
-			Interpreter, load_delegate = tf.lite.Interpreter, tf.lite.experimental.load_delegate
+		self.infer_calls = 0\
 
 		# Request for VX delegate for running model on NPU (vs CPU)
 		delegates = []
