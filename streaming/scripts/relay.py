@@ -104,9 +104,15 @@ def parse_args() -> argparse.Namespace:
 	# For measuring the relay on its own (streaming/scripts/test/relay_bench.py): a local file in, flat out.
 	parser.add_argument("--input", type=str,
 	                    help="read an MP4 file (path, or a name in streaming/videos) instead of the Pi's stream")
-	parser.add_argument("--output", choices=["vm", "fake"], default="vm",
-	                    help="vm = serve the result to the VM; fake = discard it after encoding (fakesink, not "
-	                         "paced, no waiting for the VM)")
+	parser.add_argument(
+		"--output", choices=["vm", "fake", "file"], default="vm",
+		help="vm = stream to VM; fake = discard encoded frames; file = save MP4"
+	)
+	parser.add_argument(
+		"--output-file", type=Path,
+		default=VIDEOS_DIR / "recovered_random_loss.mp4",
+		help="MP4 destination when --output file is selected"
+	)
 	parser.add_argument("--no-queues", action="store_true",
 	                    help="leave out the queues between the steps, for comparison")
 
@@ -121,6 +127,8 @@ def parse_args() -> argparse.Namespace:
     )
 
 	args = parser.parse_args()
+	if args.output == "file" and args.encoder == "mpeg4":
+		parser.error("--output file currently requires H.264 encoding")
 	if not args.input and not args.host:
 		parser.error("--host is needed unless --input is given")
 	return args
@@ -653,19 +661,44 @@ def build_arm_b(args: argparse.Namespace) -> SimpleNamespace:
 	encode_queue = None if args.no_queues else make_element("queue", "encode_queue")
 	output_converter = make_output_converter(args.convert_threads)
 	encoder = make_encoder(args.encoder)
+	if args.output == "file":
+		if encoder is None or encoder.get_factory().get_name() not in ("x264enc", "vpuenc_h264"):
+			sys.exit("--output file requires an available H.264 encoder")
+
 	if args.output == "vm":
-		sinks = [make_element("mpegtsmux", "muxer"), make_element("tcpserversink", "sink")]
+		sinks = [
+			make_element("mpegtsmux", "muxer"),
+			make_element("tcpserversink", "sink"),
+		]
+
+	elif args.output == "file":
+		sinks = [
+			make_element("h264parse", "output_parser"),
+			make_element("mp4mux", "muxer"),
+			make_element("filesink", "sink"),
+		]
+
 	else:
-		sinks = [make_element("fakesink", "sink")]
+		sinks = [
+			make_element("fakesink", "sink"),
+		]
 	if not all([appsrc, output_converter, encoder, *sinks]) or not args.no_queues and not encode_queue:
 		sys.exit("Failed to create one of arm B's elements")
 
 	if args.output == "vm":
-		sinks[1].set_property("host", args.listen_host)
-		sinks[1].set_property("port", args.listen_port)
-		sinks[1].set_property("sync", True)  # pace to the buffers' own timestamps, same reasoning as sender.py
+		sinks[-1].set_property("host", args.listen_host)
+		sinks[-1].set_property("port", args.listen_port)
+		sinks[-1].set_property("sync", True)
+
+	elif args.output == "file":
+		args.output_file.parent.mkdir(parents=True, exist_ok=True)
+		sinks[-1].set_property("location", str(args.output_file))
+		sinks[-1].set_property("sync", False)
+		print(f"Saving recovered video to: {args.output_file}")
+
 	else:
-		sinks[0].set_property("sync", False)
+		sinks[-1].set_property("sync", False)
+
 	appsrc.set_property("format", Gst.Format.TIME)
 	# Block the VFI when arm B falls behind (appsrc's own buffer is full), instead of buffering without limit: when the
 	# relay runs flat out (--output fake) the encoder then sets the pace, as it would with a queue.
@@ -673,8 +706,13 @@ def build_arm_b(args: argparse.Namespace) -> SimpleNamespace:
 	appsrc.set_property("caps", Gst.Caps.from_string(f"video/x-raw, width={WIDTH}, height={HEIGHT}, format=GRAY8"))
 
 	pipeline = assemble("relay-pipeline-2", [appsrc, encode_queue, output_converter, encoder, *sinks])
-	return SimpleNamespace(pipeline=pipeline, appsrc=appsrc, output_converter=output_converter, encoder=encoder,
-	                       server=sinks[-1] if args.output == "vm" else None)
+	return SimpleNamespace(
+		pipeline=pipeline,
+		appsrc=appsrc,
+		output_converter=output_converter,
+		encoder=encoder,
+		server=sinks[-1] if args.output == "vm" else None,
+	)
 
 
 def connect_vfi(a: SimpleNamespace, b: SimpleNamespace, technique: Passthrough, stats: RelayStats,
