@@ -45,6 +45,9 @@ from gi.repository import GLib, Gst, GstApp
 # Math/ML
 import numpy as np
 
+# Random frame dropper class
+from frame_dropper import RandomFrameDropper
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 VIDEOS_DIR = SCRIPT_DIR.parent / "videos"  # streaming/videos
 MODELS_DIR = SCRIPT_DIR.parent.parent / "artifacts"  # machine-learning/artifacts
@@ -126,70 +129,29 @@ def parse_args() -> argparse.Namespace:
         help="Random seed for reproducible frame loss"
     )
 
+	parser.add_argument(
+		"--recursive-4x",
+		action="store_true",
+		help="Use recursive midpoint VFI to convert 6 FPS input to 24 FPS"
+	)
+
 	args = parser.parse_args()
 	if args.output == "file" and args.encoder == "mpeg4":
 		parser.error("--output file currently requires H.264 encoding")
+
 	if not args.input and not args.host:
 		parser.error("--host is needed unless --input is given")
+
+	if args.recursive_4x and args.drop_probability is not None:
+		parser.error("--recursive-4x cannot be combined with random frame loss")
+	if args.recursive_4x and args.technique == "passthrough":
+		parser.error("--recursive-4x requires an interpolation technique")
 	return args
 
 
 # ---------------------------------------------------------------------------------------------------------------------
 # VFI techniques: each gets the decoded grey frames from appsink and pushes its output frames into appsrc
 # ---------------------------------------------------------------------------------------------------------------------
-class RandomFrameDropper:
-    """Simulate isolated frame losses in a decoded video stream. Drops non-consecutive frames."""
-
-    def __init__(self, probability=0.2, seed=42):
-        if not 0.0 <= probability <= 1.0:
-            raise ValueError("Drop probability must be between 0 and 1.")
-
-        self.probability = probability
-        self.rng = random.Random(seed)
-
-        self.previous_dropped = False
-        self.total_frames = 0
-        self.dropped_frames = 0
-        self.dropped_indices = []
-
-    def should_drop(self):
-        """Return True when the current frame should be dropped."""
-        frame_index = self.total_frames
-        self.total_frames += 1
-
-        # Never drop the first frame
-        if frame_index == 0:
-            self.previous_dropped = False
-            return False
-
-        # Never drop two consecutive frames
-        if self.previous_dropped:
-            self.previous_dropped = False
-            return False
-
-        drop = self.rng.random() < self.probability
-       
-        self.previous_dropped = drop
-
-        if drop:
-            self.dropped_frames += 1
-            self.dropped_indices.append(frame_index)
-
-        return drop
-
-    def report(self):
-        """Prints out information about total frames and frames dropped."""
-        actual_rate = (self.dropped_frames / self.total_frames) if self.total_frames else 0.0
-
-        # Print out the statistics
-        print("\n--- Frame Loss Statistics ---")
-        print(f"Total frames: {self.total_frames}")
-        print(f"Dropped frames: {self.dropped_frames}")
-        print(f"Actual loss rate: {actual_rate:.2%}")
-        print(f"Dropped indices: {self.dropped_indices}")
-
-
-
 class Passthrough:
 	FPS_MULTIPLIER = 1  # forwards frames 1:1; every other technique doubles them
 
@@ -312,6 +274,62 @@ class ToyUnetBlenderTFLite(Doubler):
 		output_q = self.interpreter.get_tensor(self.output_detail["index"])[0, ..., 0]
 		out_zero_point = self.output_detail["quantization"][1]
 		return (output_q.astype(np.int16) - out_zero_point).astype(np.uint8)
+
+
+class RecursiveQuadrupler:
+	"""Convert 6 FPS to 24 FPS using recursive midpoint interpolation."""
+
+	FPS_MULTIPLIER = 4
+
+	def __init__(self, technique):
+		self.technique = technique
+		self.appsrc = technique.appsrc
+		self.previous = None
+		self.interpolated = 0
+
+	def on_new_sample(self, sink):
+		sample = sink.pull_sample()
+		if sample is None:
+			return Gst.FlowReturn.ERROR
+
+		current = sample.get_buffer()
+
+		if self.previous is None:
+			self.previous = current
+			return self.appsrc.push_buffer(current)
+
+		previous = self.previous
+
+		# First inference: midpoint at 1/2.
+		mid = self.technique.middle_buffer(previous, current)
+
+		# Second inference: midpoint at 1/4.
+		quarter = self.technique.middle_buffer(previous, mid)
+
+		# Third inference: midpoint at 3/4.
+		three_quarter = self.technique.middle_buffer(mid, current)
+
+		frame_duration = Gst.SECOND // 24
+
+		for generated in (quarter, mid, three_quarter):
+			generated.duration = frame_duration
+		
+		# Push frames in presentation order.
+		for buffer in (quarter, mid, three_quarter, current):
+			result = self.appsrc.push_buffer(buffer)
+			if result != Gst.FlowReturn.OK:
+				return result
+
+		self.previous = current
+		self.interpolated += 3
+		return Gst.FlowReturn.OK
+
+	def on_eos(self, sink):
+		self.appsrc.end_of_stream()
+
+	def report(self):
+		print(f"Recursive VFI generated frames: {self.interpolated}")
+
 
 class RandomLossRecovery:
     """Recover isolated dropped frames while preserving the 24 FPS timeline."""
@@ -953,10 +971,10 @@ class RelayStats:
         # RandomLossRecovery wraps the original VFI technique.
         # Access the underlying model for inference statistics
 		model = (
-                technique.technique
-                if isinstance(technique, RandomLossRecovery)
-                else technique
-                )
+			technique.technique
+			if isinstance(technique, (RandomLossRecovery, RecursiveQuadrupler))
+			else technique
+		)
 		# Only toy_unet_tflite has an inference step to report.
 		if getattr(model, "infer_calls", 0) > 0:
 			stats["infer_ms"] = model.total_infer_time / model.infer_calls * 1000
@@ -989,6 +1007,16 @@ def main() -> None:
 
 	# Final setup
 	technique = make_technique(args.technique, appsrc, args.inference)
+
+	if args.recursive_4x:
+		technique = RecursiveQuadrupler(technique)
+
+	elif args.drop_probability is not None:
+		technique = RandomLossRecovery(
+			technique,
+			probability=args.drop_probability,
+			seed=args.seed,
+		)
 
 	# Wrap the VFI technique when random frame-loss simulation is enabled.
 	if args.drop_probability is not None:
@@ -1028,6 +1056,9 @@ def main() -> None:
 	stats.report(technique, appsrc, scale_timer, encode_timer)
 
 	if isinstance(technique, RandomLossRecovery):
+		technique.report()
+	
+	if isinstance(technique, RecursiveQuadrupler):
 		technique.report()
 
 	print("Relay finished.")
