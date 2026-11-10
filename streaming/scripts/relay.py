@@ -22,9 +22,19 @@ import os
 import sys
 import threading
 import time
+import random
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
+
+# Preload the TensorFlow fallback before GStreamer initialization.
+# On the i.MX8, use the lightweight standalone TFLite runtime instead.
+try:
+	from tflite_runtime.interpreter import Interpreter, load_delegate
+except ImportError:
+	import tensorflow as tf
+	Interpreter = tf.lite.Interpreter
+	load_delegate = tf.lite.experimental.load_delegate
 
 # GStreamer
 import gi
@@ -99,7 +109,17 @@ def parse_args() -> argparse.Namespace:
 	                         "paced, no waiting for the VM)")
 	parser.add_argument("--no-queues", action="store_true",
 	                    help="leave out the queues between the steps, for comparison")
-	
+
+    # For handling random non-consecutive frame dropping
+	parser.add_argument(
+        "--drop-probability", type=float, default=None,
+        help="Enable random isolated frame loss (0.0 to 1.0)"
+    )
+	parser.add_argument(
+        "--seed", type=int, default=42,
+        help="Random seed for reproducible frame loss"
+    )
+
 	args = parser.parse_args()
 	if not args.input and not args.host:
 		parser.error("--host is needed unless --input is given")
@@ -109,6 +129,59 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------------------------------------------------
 # VFI techniques: each gets the decoded grey frames from appsink and pushes its output frames into appsrc
 # ---------------------------------------------------------------------------------------------------------------------
+class RandomFrameDropper:
+    """Simulate isolated frame losses in a decoded video stream. Drops non-consecutive frames."""
+
+    def __init__(self, probability=0.2, seed=42):
+        if not 0.0 <= probability <= 1.0:
+            raise ValueError("Drop probability must be between 0 and 1.")
+
+        self.probability = probability
+        self.rng = random.Random(seed)
+
+        self.previous_dropped = False
+        self.total_frames = 0
+        self.dropped_frames = 0
+        self.dropped_indices = []
+
+    def should_drop(self):
+        """Return True when the current frame should be dropped."""
+        frame_index = self.total_frames
+        self.total_frames += 1
+
+        # Never drop the first frame
+        if frame_index == 0:
+            self.previous_dropped = False
+            return False
+
+        # Never drop two consecutive frames
+        if self.previous_dropped:
+            self.previous_dropped = False
+            return False
+
+        drop = self.rng.random() < self.probability
+       
+        self.previous_dropped = drop
+
+        if drop:
+            self.dropped_frames += 1
+            self.dropped_indices.append(frame_index)
+
+        return drop
+
+    def report(self):
+        """Prints out information about total frames and frames dropped."""
+        actual_rate = (self.dropped_frames / self.total_frames) if self.total_frames else 0.0
+
+        # Print out the statistics
+        print("\n--- Frame Loss Statistics ---")
+        print(f"Total frames: {self.total_frames}")
+        print(f"Dropped frames: {self.dropped_frames}")
+        print(f"Actual loss rate: {actual_rate:.2%}")
+        print(f"Dropped indices: {self.dropped_indices}")
+
+
+
 class Passthrough:
 	FPS_MULTIPLIER = 1  # forwards frames 1:1; every other technique doubles them
 
@@ -177,15 +250,7 @@ class ToyUnetBlenderTFLite(Doubler):
 	def __init__(self, appsrc: GstApp.AppSrc | TimedAppsrc, inference: str = "npu") -> None:
 		super().__init__(appsrc)
 		self.total_infer_time = 0.0
-		self.infer_calls = 0
-
-		# tflite_runtime + vx_delegate exist only on the iMX8; elsewhere (e.g. the VM) fall back to
-		# full TensorFlow's interpreter on CPU, so this technique still runs as a CPU baseline.
-		try:
-			from tflite_runtime.interpreter import Interpreter, load_delegate
-		except ImportError:
-			import tensorflow as tf
-			Interpreter, load_delegate = tf.lite.Interpreter, tf.lite.experimental.load_delegate
+		self.infer_calls = 0\
 
 		# Request for VX delegate for running model on NPU (vs CPU)
 		delegates = []
@@ -240,6 +305,66 @@ class ToyUnetBlenderTFLite(Doubler):
 		out_zero_point = self.output_detail["quantization"][1]
 		return (output_q.astype(np.int16) - out_zero_point).astype(np.uint8)
 
+class RandomLossRecovery:
+    """Recover isolated dropped frames while preserving the 24 FPS timeline."""
+
+    FPS_MULTIPLIER = 1
+
+    def __init__(self, technique, probability, seed, fps=24):
+        self.technique = technique
+        self.appsrc = technique.appsrc
+        self.dropper = RandomFrameDropper(probability, seed)
+        self.frame_period = Gst.SECOND / fps
+        self.previous = None
+        self.recovered = 0
+
+    def on_new_sample(self, sink):
+        sample = sink.pull_sample()
+        if sample is None:
+            return Gst.FlowReturn.ERROR
+
+        buffer = sample.get_buffer()
+
+        # Simulate loss after decoding, before VFI
+        if self.dropper.should_drop():
+            return Gst.FlowReturn.OK
+
+        if buffer.pts == Gst.CLOCK_TIME_NONE:
+            print("Missing PTS: cannot perform timestamp recovery")
+            return Gst.FlowReturn.ERROR
+
+        if self.previous is not None:
+            gap = buffer.pts - self.previous.pts
+            interval = round(gap / self.frame_period)
+
+            # Check if two frame interval and the frame gap is about 2 frames
+            if interval == 2 and abs(gap - 2 * self.frame_period) <= 0.25 * self.frame_period:
+                middle = self.technique.middle_buffer(self.previous, buffer)  # Generate intermediate frame
+                middle.duration = round(self.frame_period)
+
+                result = self.appsrc.push_buffer(middle)
+                if result != Gst.FlowReturn.OK:
+                    return result
+
+                self.recovered += 1
+
+            elif interval != 1 or abs(gap - self.frame_period) > 0.25 * self.frame_period:
+                print(f"Unsupported timestamp gap: {gap} ns")
+                return Gst.FlowReturn.ERROR
+
+        result = self.appsrc.push_buffer(buffer)
+        if result != Gst.FlowReturn.OK:
+            return result
+
+        self.previous = buffer
+        return Gst.FlowReturn.OK
+
+    def on_eos(self, sink):
+        self.appsrc.end_of_stream()
+
+    def report(self):
+        self.dropper.report()
+        print(f"Recovered frames: {self.recovered}")
 
 TECHNIQUES = {
 	"passthrough": Passthrough,
@@ -787,10 +912,17 @@ class RelayStats:
 		else:
 			print("No frames were relayed.")
 
+        # RandomLossRecovery wraps the original VFI technique.
+        # Access the underlying model for inference statistics
+		model = (
+                technique.technique
+                if isinstance(technique, RandomLossRecovery)
+                else technique
+                )
 		# Only toy_unet_tflite has an inference step to report.
-		if getattr(technique, "infer_calls", 0) > 0:
-			stats["infer_ms"] = technique.total_infer_time / technique.infer_calls * 1000
-			print(f"Mean inference latency ({technique.infer_calls} calls): {stats['infer_ms']:.2f} ms/frame")
+		if getattr(model, "infer_calls", 0) > 0:
+			stats["infer_ms"] = model.total_infer_time / model.infer_calls * 1000
+			print(f"Mean inference latency ({model.infer_calls} calls): {stats['infer_ms']:.2f} ms/frame")
 		if RangeLookup.frames:
 			stats["lookup_ms"] = RangeLookup.total / RangeLookup.frames * 1000
 			print(f"Mean range lookup: {stats['lookup_ms']:.2f} ms/frame ({RangeLookup.frames} frames)")
@@ -819,6 +951,21 @@ def main() -> None:
 
 	# Final setup
 	technique = make_technique(args.technique, appsrc, args.inference)
+
+	# Wrap the VFI technique when random frame-loss simulation is enabled.
+	if args.drop_probability is not None:
+		if not 0.0 <= args.drop_probability <= 1.0:
+			sys.exit("Drop probability must be between 0 and 1")
+
+		if args.technique == "passthrough":
+			sys.exit("Random loss recovery requires an interpolation technique")
+
+		technique = RandomLossRecovery(
+			technique,
+			probability=args.drop_probability,
+			seed=args.seed,
+		)
+
 	stream_ended = threading.Event()
 	connect_vfi(a, b, technique, stats, stream_ended)
 
@@ -839,8 +986,14 @@ def main() -> None:
 	a.pipeline.set_state(Gst.State.NULL)
 	b.pipeline.set_state(Gst.State.NULL)
 
+    # Report statistics for the technique and RandomLossRecovery (if utilised)
 	stats.report(technique, appsrc, scale_timer, encode_timer)
+
+	if isinstance(technique, RandomLossRecovery):
+		technique.report()
+
 	print("Relay finished.")
+
 
 
 if __name__ == "__main__":
