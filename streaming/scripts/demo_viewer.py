@@ -22,6 +22,8 @@ MODES = {
                  'sintel_trailer-{res}.mp4', '12 FPS input'),
     'random': ('Random isolated frame-loss recovery', 'stuttering_p50.mp4',
                'sintel_trailer-480p.mp4', 'Frame-held 24 FPS baseline'),
+    'burst': ('Burst frame-loss recovery', 'stuttering_burst.mp4',
+              'sintel_trailer-480p.mp4', 'Frame-held 24 FPS baseline'),
     'recursive': ('Recursive 6 to 24 FPS', 'framehold_6to24.mp4',
                   'sintel_trailer-480p.mp4', '6 FPS frame-held at 24 FPS'),
 }

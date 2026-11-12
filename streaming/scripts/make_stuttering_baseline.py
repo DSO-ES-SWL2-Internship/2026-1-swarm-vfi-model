@@ -1,6 +1,6 @@
 
 #!/usr/bin/env python3
-"""Create a 24 FPS frame-held baseline using the relay's drop pattern."""
+"""Create a 24 FPS frame-held baseline using the relay's drop pattern (same probability, seed and max run)."""
 
 import argparse
 import subprocess
@@ -39,6 +39,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--drop-probability", type=float, default=0.20)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--max-run", type=int, default=1,
+                        help="longest burst of consecutive dropped frames (same as relay.py --max-drop-run)")
     args = parser.parse_args()
 
     if not args.input.is_file():
@@ -55,6 +57,7 @@ def main():
     dropper = RandomFrameDropper(
         probability=args.drop_probability,
         seed=args.seed,
+        max_run=args.max_run,
     )
 
     # Decode to model-sized grayscale frames.
