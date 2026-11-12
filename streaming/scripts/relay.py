@@ -46,7 +46,7 @@ from gi.repository import GLib, Gst, GstApp
 import numpy as np
 
 # Random frame dropper class
-from frame_dropper import RandomFrameDropper
+from frame_dropper import RandomFrameDropper, gap_fill_plan
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 VIDEOS_DIR = SCRIPT_DIR.parent / "videos"  # streaming/videos
@@ -119,15 +119,14 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument("--no-queues", action="store_true",
 	                    help="leave out the queues between the steps, for comparison")
 
-    # For handling random non-consecutive frame dropping
-	parser.add_argument(
-        "--drop-probability", type=float, default=None,
-        help="Enable random isolated frame loss (0.0 to 1.0)"
-    )
-	parser.add_argument(
-        "--seed", type=int, default=42,
-        help="Random seed for reproducible frame loss"
-    )
+	# Simulated frame loss, recovered by the VFI (demo: makes the effect of the interpolation easy to see)
+	parser.add_argument("--drop-probability", type=float, default=None,
+	                    help="simulate frame loss: chance, at each frame, that a burst of lost frames starts (0.0 to 1.0)")
+	parser.add_argument("--max-drop-run", type=int, default=1,
+	                    help="longest burst of consecutive lost frames; each burst's length is random, 1 to this. The "
+	                         "VFI fills a burst of n by n inferences, and the U-Net is only trained on 1-frame gaps, so "
+	                         "3 (a gap of 4, split exactly) is a good largest value")
+	parser.add_argument("--seed", type=int, default=42, help="random seed for reproducible frame loss")
 
 	parser.add_argument(
 		"--recursive-4x",
@@ -142,8 +141,14 @@ def parse_args() -> argparse.Namespace:
 	if not args.input and not args.host:
 		parser.error("--host is needed unless --input is given")
 
+	if args.drop_probability is not None and not 0.0 <= args.drop_probability <= 1.0:
+		parser.error("--drop-probability must be between 0 and 1")
+	if args.max_drop_run < 1:
+		parser.error("--max-drop-run must be at least 1")
 	if args.recursive_4x and args.drop_probability is not None:
 		parser.error("--recursive-4x cannot be combined with random frame loss")
+	if args.drop_probability is not None and args.technique == "passthrough":
+		parser.error("random frame loss recovery requires an interpolation technique")
 	if args.recursive_4x and args.technique == "passthrough":
 		parser.error("--recursive-4x requires an interpolation technique")
 	return args
@@ -220,7 +225,7 @@ class ToyUnetBlenderTFLite(Doubler):
 	def __init__(self, appsrc: GstApp.AppSrc | TimedAppsrc, inference: str = "npu") -> None:
 		super().__init__(appsrc)
 		self.total_infer_time = 0.0
-		self.infer_calls = 0\
+		self.infer_calls = 0
 
 		# Request for VX delegate for running model on NPU (vs CPU)
 		delegates = []
@@ -332,65 +337,80 @@ class RecursiveQuadrupler:
 
 
 class RandomLossRecovery:
-    """Recover isolated dropped frames while preserving the 24 FPS timeline."""
+	"""Recover simulated frame losses while keeping the 24 fps timeline.
 
-    FPS_MULTIPLIER = 1
+	Frames are dropped after decoding, in bursts (RandomFrameDropper). A gap in the timestamps then shows how many are
+	missing: n missing frames are n frames' worth of interpolation, by repeated halving (frame_dropper.gap_fill_plan).
+	"""
 
-    def __init__(self, technique, probability, seed, fps=24):
-        self.technique = technique
-        self.appsrc = technique.appsrc
-        self.dropper = RandomFrameDropper(probability, seed)
-        self.frame_period = Gst.SECOND / fps
-        self.previous = None
-        self.recovered = 0
+	FPS_MULTIPLIER = 1
 
-    def on_new_sample(self, sink):
-        sample = sink.pull_sample()
-        if sample is None:
-            return Gst.FlowReturn.ERROR
+	def __init__(self, technique, probability, seed, max_run=1, fps=24):
+		self.technique = technique
+		self.appsrc = technique.appsrc
+		self.dropper = RandomFrameDropper(probability, seed, max_run)
+		self.max_interval = max_run + 1  # frames between the two kept frames around the largest burst
+		self.frame_period = Gst.SECOND / fps
+		self.previous = None
+		self.recovered = 0
 
-        buffer = sample.get_buffer()
+	def on_new_sample(self, sink):
+		sample = sink.pull_sample()
+		if sample is None:
+			return Gst.FlowReturn.ERROR
 
-        # Simulate loss after decoding, before VFI
-        if self.dropper.should_drop():
-            return Gst.FlowReturn.OK
+		buffer = sample.get_buffer()
 
-        if buffer.pts == Gst.CLOCK_TIME_NONE:
-            print("Missing PTS: cannot perform timestamp recovery")
-            return Gst.FlowReturn.ERROR
+		# Simulate loss after decoding, before VFI
+		if self.dropper.should_drop():
+			return Gst.FlowReturn.OK
 
-        if self.previous is not None:
-            gap = buffer.pts - self.previous.pts
-            interval = round(gap / self.frame_period)
+		if buffer.pts == Gst.CLOCK_TIME_NONE:
+			print("Missing PTS: cannot perform timestamp recovery")
+			return Gst.FlowReturn.ERROR
 
-            # Check if two frame interval and the frame gap is about 2 frames
-            if interval == 2 and abs(gap - 2 * self.frame_period) <= 0.25 * self.frame_period:
-                middle = self.technique.middle_buffer(self.previous, buffer)  # Generate intermediate frame
-                middle.duration = round(self.frame_period)
+		if self.previous is not None:
+			gap = buffer.pts - self.previous.pts
+			interval = round(gap / self.frame_period)  # frame periods between the two kept frames
 
-                result = self.appsrc.push_buffer(middle)
-                if result != Gst.FlowReturn.OK:
-                    return result
+			if not 1 <= interval <= self.max_interval or abs(gap - interval * self.frame_period) > 0.25 * self.frame_period:
+				print(f"Unsupported timestamp gap: {gap} ns")
+				return Gst.FlowReturn.ERROR
 
-                self.recovered += 1
+			if interval > 1:
+				result = self.fill_gap(self.previous, buffer, interval, gap)
+				if result != Gst.FlowReturn.OK:
+					return result
 
-            elif interval != 1 or abs(gap - self.frame_period) > 0.25 * self.frame_period:
-                print(f"Unsupported timestamp gap: {gap} ns")
-                return Gst.FlowReturn.ERROR
+		result = self.appsrc.push_buffer(buffer)
+		if result != Gst.FlowReturn.OK:
+			return result
 
-        result = self.appsrc.push_buffer(buffer)
-        if result != Gst.FlowReturn.OK:
-            return result
+		self.previous = buffer
+		return Gst.FlowReturn.OK
 
-        self.previous = buffer
-        return Gst.FlowReturn.OK
+	def fill_gap(self, first, last, interval, gap):
+		# Makes the missing frames between first and last, each as the midpoint of two existing ones, and pushes them in
+		# order. Each frame gets the timestamp of its own place in the gap.
+		frames = {0: first, interval: last}
+		for position, left, right in gap_fill_plan(interval):
+			frames[position] = self.technique.middle_buffer(frames[left], frames[right])
+			frames[position].pts = first.pts + round(position * gap / interval)
+		for position in range(1, interval):
+			frames[position].duration = round(self.frame_period)
+			result = self.appsrc.push_buffer(frames[position])
+			if result != Gst.FlowReturn.OK:
+				return result
+			self.recovered += 1
+		return Gst.FlowReturn.OK
 
-    def on_eos(self, sink):
-        self.appsrc.end_of_stream()
+	def on_eos(self, sink):
+		self.appsrc.end_of_stream()
 
-    def report(self):
-        self.dropper.report()
-        print(f"Recovered frames: {self.recovered}")
+	def report(self):
+		self.dropper.report()
+		print(f"Recovered frames: {self.recovered}")
+
 
 TECHNIQUES = {
 	"passthrough": Passthrough,
@@ -968,8 +988,7 @@ class RelayStats:
 		else:
 			print("No frames were relayed.")
 
-        # RandomLossRecovery wraps the original VFI technique.
-        # Access the underlying model for inference statistics
+		# RandomLossRecovery and RecursiveQuadrupler wrap the original VFI technique: the model is inside
 		model = (
 			technique.technique
 			if isinstance(technique, (RandomLossRecovery, RecursiveQuadrupler))
@@ -1010,27 +1029,9 @@ def main() -> None:
 
 	if args.recursive_4x:
 		technique = RecursiveQuadrupler(technique)
-
 	elif args.drop_probability is not None:
-		technique = RandomLossRecovery(
-			technique,
-			probability=args.drop_probability,
-			seed=args.seed,
-		)
-
-	# Wrap the VFI technique when random frame-loss simulation is enabled.
-	if args.drop_probability is not None:
-		if not 0.0 <= args.drop_probability <= 1.0:
-			sys.exit("Drop probability must be between 0 and 1")
-
-		if args.technique == "passthrough":
-			sys.exit("Random loss recovery requires an interpolation technique")
-
-		technique = RandomLossRecovery(
-			technique,
-			probability=args.drop_probability,
-			seed=args.seed,
-		)
+		technique = RandomLossRecovery(technique, probability=args.drop_probability, seed=args.seed,
+		                               max_run=args.max_drop_run)
 
 	stream_ended = threading.Event()
 	connect_vfi(a, b, technique, stats, stream_ended)
@@ -1052,13 +1053,10 @@ def main() -> None:
 	a.pipeline.set_state(Gst.State.NULL)
 	b.pipeline.set_state(Gst.State.NULL)
 
-    # Report statistics for the technique and RandomLossRecovery (if utilised)
+	# Report statistics for the technique and the loss recovery or recursive VFI (if used)
 	stats.report(technique, appsrc, scale_timer, encode_timer)
 
-	if isinstance(technique, RandomLossRecovery):
-		technique.report()
-	
-	if isinstance(technique, RecursiveQuadrupler):
+	if isinstance(technique, (RandomLossRecovery, RecursiveQuadrupler)):
 		technique.report()
 
 	print("Relay finished.")
