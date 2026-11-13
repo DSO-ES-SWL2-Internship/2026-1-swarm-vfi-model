@@ -1,9 +1,14 @@
 # Builds tiny single-layer INT8 TFLite models mirroring the toy U-Net's layers (real shapes, full
-# 448x256 resolution), each exported per-channel (TF's default, like toy_unet_int8.tflite) and
-# per-tensor, plus the real trained U-Net exported per-tensor. Benchmarked on the board's CPU/NPU/GPU
+# 448x256 resolution), each exported per-channel (TF's default, like the earlier deployed model) and
+# per-tensor, plus the deployed U-Net exported both ways. Benchmarked on the board's CPU/NPU/GPU
 # (benchmarks/benchmark_backends.sh), they show which layer type or quantisation style makes the GPU so slow
 # on our model (9.4 s/inference) when it handles MobileNet at CPU-like speed.
 # Usage (on the VM): python3 gpu_layer_test.py   -> artifacts/gpu_layer_test/*.tflite
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # scripts/: model, data, evaluate, export_tflite
 
 import numpy as np
 import tensorflow as tf
@@ -12,11 +17,10 @@ from tensorflow.keras import layers
 from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2
 
 import export_tflite
-import interpolate
-import training
+import model as vfi
 
-OUT_DIR = training.ARTIFACTS_DIR / "gpu_layer_test"
-H, W = training.IMG_HEIGHT, training.IMG_WIDTH  # 256, 448
+OUT_DIR = vfi.ARTIFACTS_DIR / "gpu_layer_test"
+H, W = vfi.IMG_HEIGHT, vfi.IMG_WIDTH  # 256, 448
 
 
 # Build single layer with name and model
@@ -64,15 +68,21 @@ def random_representative(model):
 	return gen
 
 
-OUT_DIR.mkdir(parents=True, exist_ok=True)
-for name, model in LAYER_MODELS:
+def main():
+	OUT_DIR.mkdir(parents=True, exist_ok=True)
+	for name, model in LAYER_MODELS:
+		for per_tensor in (False, True):
+			path = OUT_DIR / f"{name}_{'pertensor' if per_tensor else 'perchannel'}.tflite"
+			path.write_bytes(convert(model, random_representative(model), per_tensor))
+			print(f"wrote {path.name} ({path.stat().st_size / 1024:.0f} KB)")
+
+	# The deployed model, calibrated on the same frames as export_tflite.py.
+	unet = vfi.load_model()
 	for per_tensor in (False, True):
-		path = OUT_DIR / f"{name}_{'pertensor' if per_tensor else 'perchannel'}.tflite"
-		path.write_bytes(convert(model, random_representative(model), per_tensor))
+		path = OUT_DIR / f"vfi_unet_{'pertensor' if per_tensor else 'perchannel'}.tflite"
+		path.write_bytes(convert(unet, export_tflite.representative_dataset_gen, per_tensor))
 		print(f"wrote {path.name} ({path.stat().st_size / 1024:.0f} KB)")
 
-# The real trained model, per-tensor, calibrated on the same Vimeo data as export_tflite.py.
-unet = interpolate.load_model()
-path = OUT_DIR / "toy_unet_pertensor.tflite"
-path.write_bytes(convert(unet, export_tflite.representative_dataset_gen, per_tensor=True))
-print(f"wrote {path.name} ({path.stat().st_size / 1024:.0f} KB)")
+
+if __name__ == "__main__":
+	main()

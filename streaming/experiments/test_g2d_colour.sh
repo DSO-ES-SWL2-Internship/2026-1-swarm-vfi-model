@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SRC="filesrc location=../../videos/sintel_trailer-480p.mp4 ! qtdemux ! h264parse ! vpudec frame-drop=false"
+SRC="filesrc location=../videos/sintel_trailer-480p.mp4 ! qtdemux ! h264parse ! vpudec frame-drop=false"
 G2D="imxvideoconvert_g2d ! video/x-raw,width=448,height=256"
 ENC="videoconvert ! vpuenc_h264 bitrate=2000 ! h264parse ! mp4mux"
 

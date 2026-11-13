@@ -18,7 +18,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-RESULTS_DIR = Path(__file__).resolve().parent.parent.parent / "videos" / "benchmark"
+RESULTS_DIR = Path(__file__).resolve().parent.parent / "videos" / "benchmark"
 RESOLUTIONS = ["480p", "720p", "1080p"]
 STARTUP_S = 1.0  # same exclusion as codec_suite.py's summary
 

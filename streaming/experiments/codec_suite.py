@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-VIDEOS_DIR = SCRIPT_DIR.parent.parent / "videos"
+VIDEOS_DIR = SCRIPT_DIR.parent / "videos"
 RESULTS_DIR = VIDEOS_DIR / "benchmark"
 
 FRAMES = 1251  # every sintel_trailer-*.mp4 source has 1251 video frames
@@ -152,109 +152,114 @@ def utilisation(samples):
 	return out
 
 
-parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--repeats", type=int, default=3)
-parser.add_argument("--resolutions", nargs="+", default=["480p", "720p", "1080p"])
-parser.add_argument("--only", default="",
-                    help='only run configs whose name contains this text, e.g. "vpu -> g2d"')
-parser.add_argument("--pace", type=int, default=0,
-                    help="play the <pace>fps copies of the sources in real time (0 = flat out); needs "
-                         "sintel_trailer-<res>-<pace>fps.mp4, e.g. made with ffmpeg -itsscale")
-parser.add_argument("--keep-output", action="store_true",
-                    help="write each run's result to an MP4 in /tmp (for correctness checks) instead of discarding it")
-args = parser.parse_args()
+def main():
+	parser = argparse.ArgumentParser(description=__doc__)
+	parser.add_argument("--repeats", type=int, default=3)
+	parser.add_argument("--resolutions", nargs="+", default=["480p", "720p", "1080p"])
+	parser.add_argument("--only", default="",
+	                    help='only run configs whose name contains this text, e.g. "vpu -> g2d"')
+	parser.add_argument("--pace", type=int, default=0,
+	                    help="play the <pace>fps copies of the sources in real time (0 = flat out); needs "
+	                         "sintel_trailer-<res>-<pace>fps.mp4, e.g. made with ffmpeg -itsscale")
+	parser.add_argument("--keep-output", action="store_true",
+	                    help="write each run's result to an MP4 in /tmp (for correctness checks) instead of discarding it")
+	args = parser.parse_args()
 
-configs = list(itertools.product(DECODERS, SCALERS, ENCODERS))  # 8 (decoder, scaler, encoder) combos
-configs = [c for c in configs if args.only in " -> ".join(c)]
-if not configs:
-	raise SystemExit(f"no config matches --only {args.only!r}")
-suffix = f"-{args.pace}fps" if args.pace else ""
-videos = {}
-for res in args.resolutions:
-	path = VIDEOS_DIR / f"sintel_trailer-{res}{suffix}.mp4"
-	if path.exists():
-		videos[res] = path
-	else:
-		print(f"skipping {res}: {path} not found")
-if not read_gc_load():
-	print(f"note: {GC_LOAD_PATH} not readable -- GPU/NPU load will be blank (mount debugfs as root on the board)")
+	configs = list(itertools.product(DECODERS, SCALERS, ENCODERS))  # 8 (decoder, scaler, encoder) combos
+	configs = [c for c in configs if args.only in " -> ".join(c)]
+	if not configs:
+		raise SystemExit(f"no config matches --only {args.only!r}")
+	suffix = f"-{args.pace}fps" if args.pace else ""
+	videos = {}
+	for res in args.resolutions:
+		path = VIDEOS_DIR / f"sintel_trailer-{res}{suffix}.mp4"
+		if path.exists():
+			videos[res] = path
+		else:
+			print(f"skipping {res}: {path} not found")
+	if not read_gc_load():
+		print(f"note: {GC_LOAD_PATH} not readable -- GPU/NPU load will be blank (mount debugfs as root on the board)")
 
-stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-mode = f"paced{args.pace}" if args.pace else "flatout"
-RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-csv_path = RESULTS_DIR / f"codec_suite_{mode}_{stamp}.csv"
-timeseries_path = RESULTS_DIR / f"codec_suite_{mode}_{stamp}_timeseries.csv"
-summary_path = RESULTS_DIR / f"codec_suite_{mode}_{stamp}.txt"
-expected_s = FRAMES / args.pace if args.pace else None
+	stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+	mode = f"paced{args.pace}" if args.pace else "flatout"
+	RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+	csv_path = RESULTS_DIR / f"codec_suite_{mode}_{stamp}.csv"
+	timeseries_path = RESULTS_DIR / f"codec_suite_{mode}_{stamp}_timeseries.csv"
+	summary_path = RESULTS_DIR / f"codec_suite_{mode}_{stamp}.txt"
+	expected_s = FRAMES / args.pace if args.pace else None
 
-# Execute runs and print out per-run results
-total = args.repeats * len(videos) * len(configs)
-rows, series, n = [], [], 0
-# Repeats are the OUTER loop: each pass visits every config once, so slow drift over the session
-# (e.g. thermal throttling) is spread across all configs instead of landing on the last ones.
-for repeat in range(1, args.repeats + 1):
-	for res, video in videos.items():
-		for dec, scale, enc in configs:
-			n += 1
-			config = f"{dec} -> {scale} -> {enc}"
-			output = f"/tmp/suite_{res}_{dec}_{scale}_{enc}.mp4" if args.keep_output else None
-			m = run_once(build_pipeline(video, dec, scale, enc, output, args.pace))
-			cpu = m["cpu_user_s"] + m["cpu_sys_s"]
-			row = {"mode": mode, "resolution": res, "decoder": dec, "scaler": scale, "encoder": enc,
-			       "config": config, "repeat": repeat, "status": "ok" if m["ok"] else "failed",
-			       "wall_s": round(m["wall_s"], 3), "cpu_s": round(cpu, 3),
-			       "cpu_user_s": round(m["cpu_user_s"], 3), "cpu_sys_s": round(m["cpu_sys_s"], 3),
-			       "fps": round(FRAMES / m["wall_s"], 1) if m["ok"] else "",
-			       # paced runs: how far behind real time the run finished (small = kept up; includes ~0.3s startup)
-			       "lag_s": round(m["wall_s"] - expected_s, 2) if expected_s and m["ok"] else "",
-			       **utilisation(m["samples"]), "error": m["error"]}
-			rows.append(row)
-			for s in m["samples"]:
-				series.append({"resolution": res, "config": config, "repeat": repeat, "t": round(s["t"], 2),
-				               **{f"cpu{c}": round(v, 1) for c, v in enumerate(s["cores"])},
-				               "gpu": s["gc"].get(0, ""), "npu": s["gc"].get(1, "")})
-			if m["ok"]:
-				lag = f"  lag {row['lag_s']:+5.2f}s" if expected_s else ""
-				result = (f"{row['fps']:6.1f} fps  {cpu:6.1f} CPU-s  CPU {row.get('cpu_util_mean_pct', 0):5.1f}% "
-				          f"(p95 {row.get('cpu_util_p95_pct', 0):5.1f}%){lag}")
-			else:
-				result = f"FAILED: {m['error']}"
-			print(f"[{n:3d}/{total}] repeat {repeat}  {res:>5}  {config:<22} {result}", flush=True)
+	# Execute runs and print out per-run results
+	total = args.repeats * len(videos) * len(configs)
+	rows, series, n = [], [], 0
+	# Repeats are the OUTER loop: each pass visits every config once, so slow drift over the session
+	# (e.g. thermal throttling) is spread across all configs instead of landing on the last ones.
+	for repeat in range(1, args.repeats + 1):
+		for res, video in videos.items():
+			for dec, scale, enc in configs:
+				n += 1
+				config = f"{dec} -> {scale} -> {enc}"
+				output = f"/tmp/suite_{res}_{dec}_{scale}_{enc}.mp4" if args.keep_output else None
+				m = run_once(build_pipeline(video, dec, scale, enc, output, args.pace))
+				cpu = m["cpu_user_s"] + m["cpu_sys_s"]
+				row = {"mode": mode, "resolution": res, "decoder": dec, "scaler": scale, "encoder": enc,
+				       "config": config, "repeat": repeat, "status": "ok" if m["ok"] else "failed",
+				       "wall_s": round(m["wall_s"], 3), "cpu_s": round(cpu, 3),
+				       "cpu_user_s": round(m["cpu_user_s"], 3), "cpu_sys_s": round(m["cpu_sys_s"], 3),
+				       "fps": round(FRAMES / m["wall_s"], 1) if m["ok"] else "",
+				       # paced runs: how far behind real time the run finished (small = kept up; includes ~0.3s startup)
+				       "lag_s": round(m["wall_s"] - expected_s, 2) if expected_s and m["ok"] else "",
+				       **utilisation(m["samples"]), "error": m["error"]}
+				rows.append(row)
+				for s in m["samples"]:
+					series.append({"resolution": res, "config": config, "repeat": repeat, "t": round(s["t"], 2),
+					               **{f"cpu{c}": round(v, 1) for c, v in enumerate(s["cores"])},
+					               "gpu": s["gc"].get(0, ""), "npu": s["gc"].get(1, "")})
+				if m["ok"]:
+					lag = f"  lag {row['lag_s']:+5.2f}s" if expected_s else ""
+					result = (f"{row['fps']:6.1f} fps  {cpu:6.1f} CPU-s  CPU {row.get('cpu_util_mean_pct', 0):5.1f}% "
+					          f"(p95 {row.get('cpu_util_p95_pct', 0):5.1f}%){lag}")
+				else:
+					result = f"FAILED: {m['error']}"
+				print(f"[{n:3d}/{total}] repeat {repeat}  {res:>5}  {config:<22} {result}", flush=True)
 
-# Write results to csv files: one row per run, and one row per utilisation sample
-fields = list(dict.fromkeys(k for r in rows for k in r))  # union of keys, in first-seen order
-with open(csv_path, "w", newline="") as f:
-	writer = csv.DictWriter(f, fieldnames=fields, restval="")
-	writer.writeheader()
-	writer.writerows(rows)
-if series:
-	with open(timeseries_path, "w", newline="") as f:
-		writer = csv.DictWriter(f, fieldnames=list(series[0].keys()))
+	# Write results to csv files: one row per run, and one row per utilisation sample
+	fields = list(dict.fromkeys(k for r in rows for k in r))  # union of keys, in first-seen order
+	with open(csv_path, "w", newline="") as f:
+		writer = csv.DictWriter(f, fieldnames=fields, restval="")
 		writer.writeheader()
-		writer.writerows(series)
+		writer.writerows(rows)
+	if series:
+		with open(timeseries_path, "w", newline="") as f:
+			writer = csv.DictWriter(f, fieldnames=list(series[0].keys()))
+			writer.writeheader()
+			writer.writerows(series)
 
-# Print and write summary: mean (and stdev when repeated) per resolution x config, successful runs only.
-pacing = f"paced at {args.pace} fps (real time, {expected_s:.1f}s of video)" if args.pace else "flat out"
-lines = [f"Codec suite {stamp}: {args.repeats} repeat(s), {FRAMES} frames per run, {pacing}.",
-         "CPU encoder = avenc_mpeg4 (MPEG-4 Part 2); VPU encoder = vpuenc_h264 (H.264).",
-         f"CPU % = system-wide busy share of all {N_CORES} cores (100% = all cores fully busy).", "",
-         f"{'res':>5}  {'decode -> scale -> encode':<24} {'fps':>7} {'CPU-s':>7} {'CPU %':>6} {'p95 %':>7} "
-         f"{'GPU %':>6} {'NPU %':>6} {'lag s':>6}  runs"]
-for res in videos:
-	for dec, scale, enc in configs:
-		config = f"{dec} -> {scale} -> {enc}"
-		ok = [r for r in rows if r["resolution"] == res and r["config"] == config and r["status"] == "ok"]
-		if not ok:
-			lines.append(f"{res:>5}  {config:<24} {'FAILED':>7}")
-			continue
+	# Print and write summary: mean (and stdev when repeated) per resolution x config, successful runs only.
+	pacing = f"paced at {args.pace} fps (real time, {expected_s:.1f}s of video)" if args.pace else "flat out"
+	lines = [f"Codec suite {stamp}: {args.repeats} repeat(s), {FRAMES} frames per run, {pacing}.",
+	         "CPU encoder = avenc_mpeg4 (MPEG-4 Part 2); VPU encoder = vpuenc_h264 (H.264).",
+	         f"CPU % = system-wide busy share of all {N_CORES} cores (100% = all cores fully busy).", "",
+	         f"{'res':>5}  {'decode -> scale -> encode':<24} {'fps':>7} {'CPU-s':>7} {'CPU %':>6} {'p95 %':>7} "
+	         f"{'GPU %':>6} {'NPU %':>6} {'lag s':>6}  runs"]
+	for res in videos:
+		for dec, scale, enc in configs:
+			config = f"{dec} -> {scale} -> {enc}"
+			ok = [r for r in rows if r["resolution"] == res and r["config"] == config and r["status"] == "ok"]
+			if not ok:
+				lines.append(f"{res:>5}  {config:<24} {'FAILED':>7}")
+				continue
 
-		def mean(key):
-			vals = [r[key] for r in ok if r.get(key) not in ("", None)]
-			return f"{statistics.mean(vals):.1f}" if vals else "-"
-		lines.append(f"{res:>5}  {config:<24} {mean('fps'):>7} {mean('cpu_s'):>7} {mean('cpu_util_mean_pct'):>6} "
-		             f"{mean('cpu_util_p95_pct'):>7} {mean('gpu_load_mean_pct'):>6} {mean('npu_load_mean_pct'):>6} "
-		             f"{mean('lag_s'):>6}  {len(ok)}/{args.repeats}")
-	lines.append("")
-summary_path.write_text("\n".join(lines))
-print("\n" + "\n".join(lines))
-print(f"Raw results: {csv_path}\nTime series: {timeseries_path}\nSummary:     {summary_path}")
+			def mean(key):
+				vals = [r[key] for r in ok if r.get(key) not in ("", None)]
+				return f"{statistics.mean(vals):.1f}" if vals else "-"
+			lines.append(f"{res:>5}  {config:<24} {mean('fps'):>7} {mean('cpu_s'):>7} {mean('cpu_util_mean_pct'):>6} "
+			             f"{mean('cpu_util_p95_pct'):>7} {mean('gpu_load_mean_pct'):>6} {mean('npu_load_mean_pct'):>6} "
+			             f"{mean('lag_s'):>6}  {len(ok)}/{args.repeats}")
+		lines.append("")
+	summary_path.write_text("\n".join(lines))
+	print("\n" + "\n".join(lines))
+	print(f"Raw results: {csv_path}\nTime series: {timeseries_path}\nSummary:     {summary_path}")
+
+
+if __name__ == "__main__":
+	main()

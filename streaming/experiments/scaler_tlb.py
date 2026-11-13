@@ -44,7 +44,7 @@ gi.require_version("GstApp", "1.0")
 gi.require_version("GstVideo", "1.0")
 from gi.repository import GLib, Gst, GstApp, GstVideo  # noqa: F401 (GstApp gives appsrc/appsink their methods)
 
-VIDEOS = Path(__file__).resolve().parent.parent.parent / "videos"
+VIDEOS = Path(__file__).resolve().parent.parent / "videos"
 DECODERS = {"vpu": "vpudec frame-drop=false", "cpu": "avdec_h264"}
 WARMUP = 20  # frames skipped before the medians (first maps, buffer pools filling)
 

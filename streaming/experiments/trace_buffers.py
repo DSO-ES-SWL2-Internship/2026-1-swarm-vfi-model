@@ -34,7 +34,7 @@ gi.require_version("GstAllocators", "1.0")
 gi.require_version("GstVideo", "1.0")
 from gi.repository import GLib, Gst, GstAllocators, GstVideo
 
-VIDEOS = Path(__file__).resolve().parent.parent.parent / "videos"
+VIDEOS = Path(__file__).resolve().parent.parent / "videos"
 DECODERS = {"vpu": "vpudec frame-drop=false", "cpu": "avdec_h264"}
 SCALERS = {"g2d": "imxvideoconvert_g2d", "cpu": "videoscale"}
 SHOW = 3  # frames printed per hand-over

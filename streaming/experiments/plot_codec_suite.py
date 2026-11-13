@@ -14,7 +14,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-RESULTS_DIR = Path(__file__).resolve().parent.parent.parent / "videos" / "benchmark"
+RESULTS_DIR = Path(__file__).resolve().parent.parent / "videos" / "benchmark"
 RESOLUTIONS = ["480p", "720p", "1080p"]
 REAL_TIME_FPS = [(24, "source: 24 fps"), (60, "stress test: 60 fps")]  # reference lines on the speed panels
 

@@ -1,7 +1,7 @@
 # How does moving each step of decode -> scale -> encode onto hardware, and putting FIFOs (queue elements)
 # between the steps, change the speed? And can the time per frame be predicted from the steps?
 #
-# Run on the iMX8: python3 streaming/scripts/test/pipeline_bench.py [--repeats 2] [--res 1080p] [--match TEXT]
+# Run on the iMX8: python3 streaming/experiments/pipeline_bench.py [--repeats 2] [--res 1080p] [--match TEXT]
 #
 # For every configuration, the 1080p trailer runs flat out (fakesink sync=false), without and with FIFOs:
 #   whole pipeline  wall time per frame and the CPU time used (fastest of --repeats runs, no probes)
@@ -47,8 +47,8 @@ import sys
 import time
 from pathlib import Path
 
-VIDEOS = Path(__file__).resolve().parent.parent.parent / "videos"
-OUT = Path(__file__).resolve().parent.parent.parent.parent / "outputs" / "pipeline_bench"
+VIDEOS = Path(__file__).resolve().parent.parent / "videos"
+OUT = Path(__file__).resolve().parent.parent.parent / "outputs" / "pipeline_bench"
 WARMUP = 20  # frames skipped before the step means (buffer pools filling, encoder lookahead)
 
 DECODE = {"cpu": "avdec_h264", "cpu1": "avdec_h264 max-threads=1", "vpu": "vpudec frame-drop=false"}

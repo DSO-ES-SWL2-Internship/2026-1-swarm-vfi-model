@@ -1,6 +1,6 @@
 # Exports float variants of the toy U-Net and of its transposed-convolution layer, to test whether the
 # GPU runs float models faster than INT8 ones. NXP's ML guide (UG10166 sec 8.1.1) says the i.MX8 GPU is
-# optimised for fixed point and half-precision float, so FP16 may suit it where INT8 (9.5 s/inference)
+# optimised for fixed point and half-precision float, so FP16 may suit it where INT8 (about 10 s/inference)
 # did not. The NPU is fixed point only, so it should not benefit.
 #   fp32: plain float model.
 #   fp16: TFLite float16 quantisation -- weights stored as float16 (half the size); TFLite inserts
@@ -9,16 +9,20 @@
 # delegate claimed, since float ops it cannot run fall back to the CPU.
 # Usage (on the VM): python3 export_float_variants.py   -> artifacts/float_variants/*.tflite
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # scripts/: model, data, evaluate, export_tflite
+
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2
 
-import interpolate
-import training
+import model as vfi
 
-OUT_DIR = training.ARTIFACTS_DIR / "float_variants"
-H, W = training.IMG_HEIGHT, training.IMG_WIDTH  # 256, 448
+OUT_DIR = vfi.ARTIFACTS_DIR / "float_variants"
+H, W = vfi.IMG_HEIGHT, vfi.IMG_WIDTH  # 256, 448
 
 
 def conv_t_layer():
@@ -48,7 +52,7 @@ def convert(model, fp16):
 
 def main():
 	OUT_DIR.mkdir(parents=True, exist_ok=True)
-	for name, model in (("toy_unet", interpolate.load_model()), ("convT", conv_t_layer()), ("mobilenet_v1", mobilenet())):
+	for name, model in (("vfi_unet", vfi.load_model()), ("convT", conv_t_layer()), ("mobilenet_v1", mobilenet())):
 		for suffix, fp16 in (("fp32", False), ("fp16", True)):
 			path = OUT_DIR / f"{name}_{suffix}.tflite"
 			path.write_bytes(convert(model, fp16))
