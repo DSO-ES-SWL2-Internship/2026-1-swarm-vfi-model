@@ -1,7 +1,7 @@
 # Live load of every accelerator on the iMX8, one screen, refreshed 4 times a second: CPU (per core),
 # GPU and NPU (galcore's gc/load), and VPU decode/encode rate (interrupt counts). Runs beside any
-# pipeline -- e.g. the real relay in Demo 2 -- instead of nnshark, whose live tracer breaks the relay's
-# TCP output. Standard library only.
+# pipeline -- e.g. the real relay in Demo 2 -- without touching it (it only reads counters). Standard
+# library only.
 #
 # Usage: python3 hw_monitor.py [--interval 0.1] [--csv load.csv]
 #   gc/load needs debugfs: mount -t debugfs none /sys/kernel/debug
@@ -29,7 +29,7 @@ from pathlib import Path
 
 GC_LOAD_PATH = Path("/sys/kernel/debug/gc/load")
 VPU_IRQS = {"decode": "hantrodec", "encode": "hx280enc"}
-# Measured on the board (20 Oct): one nnshark_demo.sh 480p run (1251 frames) raised exactly 1251
+# Measured on the board (20 Oct): one 480p relay run (1251 frames) raised exactly 1251
 # hantrodec and 1251 hx280enc interrupts.
 IRQS_PER_FRAME = 1
 VPU_SCALE = 60  # frames/s that fills the VPU bars (48 = Demo 2's output rate)

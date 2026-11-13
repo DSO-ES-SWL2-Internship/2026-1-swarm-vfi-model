@@ -7,10 +7,6 @@
 #   ./run_demo2.sh hw    the default path: VPU decode, GPU scale (OCL), model on the NPU, VPU encode.
 # For each run: start this, then the sender on the Pi (run_sender.sh), then Connect in demo_viewer.py on the VM.
 # The relay stops when the video ends and prints its CPU time and inference latency. Output: /tmp/demo2_<mode>.log.
-#
-# Not under nnshark: its live tracer cuts the relay's TCP stream to the VM after the first frame (tested 19 Oct 2026).
-# For nnshark's view of the accelerators (per-element time, NPU load), run test/nnshark_demo.sh --npu separately:
-# the same hardware path (VPU decode, GPU scale, VPU encode, the model on the NPU), without the network.
 set -euo pipefail
 cd "$(dirname "$0")"
 export PYTHONUNBUFFERED=1
