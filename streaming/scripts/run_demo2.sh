@@ -18,11 +18,12 @@ export PYTHONUNBUFFERED=1
 case "${1:-}" in
 	cpu) ARGS=(--decoder cpu --scaler cpu --encoder mpeg4 --inference cpu) ;;
 	hw) ARGS=(--inference npu) ;;
-	*) echo "usage: $0 cpu|hw" >&2; exit 1 ;;
+	*) echo "usage: $0 cpu|hw [relay.py options]" >&2; exit 1 ;;
 esac
 MODE=$1
+shift  # anything after cpu|hw goes to relay.py, e.g. --drop-probability 0.3 --max-drop-run 3 (the frame-loss demo)
 LOG=/tmp/demo2_$MODE.log
 
 echo "Relay ($MODE): now start the sender on the Pi, then press Connect in demo_viewer.py on the VM."
-python3 relay.py toy_unet_tflite --host "${PI_HOST:-172.20.10.2}" --idle-timeout "${IDLE_TIMEOUT:-60}" "${ARGS[@]}" 2>&1 |
+python3 relay.py toy_unet_tflite --host "${PI_HOST:-172.20.10.2}" --idle-timeout "${IDLE_TIMEOUT:-60}" "${ARGS[@]}" "$@" 2>&1 |
 	tee "$LOG"
