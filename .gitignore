@@ -6,5 +6,10 @@
 !*.cpp
 !**/CMakeLists.txt
 
+# The deployed model (under 1 MB together) and the data splits: they define what was trained and tested
+!artifacts/vfi_unet.keras
+!artifacts/vfi_unet.tflite
+!splits/*.txt
+
 # CMake build output (Makefiles, cache, binaries)
 build/
