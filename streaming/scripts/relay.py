@@ -134,6 +134,8 @@ def parse_args() -> argparse.Namespace:
 		help="Use recursive midpoint VFI to convert 6 FPS input to 24 FPS"
 	)
 
+	parser.add_argument("--model", type=Path, help="toy_unet_tflite model file, instead of the deployed one")
+
 	args = parser.parse_args()
 	if args.output == "file" and args.encoder == "mpeg4":
 		parser.error("--output file currently requires H.264 encoding")
@@ -254,6 +256,15 @@ class ToyUnetBlenderTFLite(Doubler):
 		if abs(in_scale * 255 - 1) > 1e-4:
 			sys.exit(f"toy_unet_tflite: input scale {in_scale} is not 1/255; re-export the model with export_tflite.py")
 
+		# An output scale other than the sigmoid's 1/256 (e.g. the residual model's, set by calibration) needs rescaling
+		# to 0-255 pixels: one table lookup per pixel, built once from the 256 possible int8 outputs. The index is the int8
+		# value's bits with the sign flipped (^ 128), i.e. value + 128, which keeps it a uint8 (the fastest take on the board).
+		out_scale, out_zero_point = self.output_detail["quantization"]
+		self.output_lut = None
+		if abs(out_scale * 256 - 1) >= 1e-3:
+			levels = np.arange(-128, 128, dtype=np.float32)
+			self.output_lut = np.clip(np.rint((levels - out_zero_point) * (out_scale * 255)), 0, 255).astype(np.uint8)
+
 		# Invoke the model to cache the graph, prevent long stall before first frame
 		print("toy_unet_tflite: warming up the model (~15s on the NPU the first time; cached after that)...")
 		warmup_start = time.perf_counter()
@@ -277,8 +288,9 @@ class ToyUnetBlenderTFLite(Doubler):
 		self.infer_calls += 1
 
 		output_q = self.interpreter.get_tensor(self.output_detail["index"])[0, ..., 0]
-		out_zero_point = self.output_detail["quantization"][1]
-		return (output_q.astype(np.int16) - out_zero_point).astype(np.uint8)
+		if self.output_lut is None:  # a sigmoid output (scale 1/256): the value is the pixel, after a shift
+			return (output_q.astype(np.int16) - self.output_detail["quantization"][1]).astype(np.uint8)
+		return self.output_lut.take(output_q.view(np.uint8) ^ 128)  # any other output scale: through the table
 
 
 class RecursiveQuadrupler:
@@ -1012,6 +1024,9 @@ class RelayStats:
 # ---------------------------------------------------------------------------------------------------------------------
 def main() -> None:
 	args = parse_args()
+	if args.model:
+		global TFLITE_MODEL_PATH
+		TFLITE_MODEL_PATH = str(args.model)
 	print(f"Queues: {'no' if args.no_queues else 'yes'}, videoconvert threads: {args.convert_threads}")
 
 	# Build relay pipelines
