@@ -11,8 +11,8 @@ the pace of its slowest step, not the sum of its steps).
 
 Usage (on the iMX8; run_relay.sh fills in the defaults):
   python3 relay.py toy_unet_tflite --host <Pi's IP>
-  python3 relay.py toy_unet_tflite --input sintel_trailer-480p-12fps.mp4 --output fake   # local file, flat out
-The original full-range relay (rgb/lut range modes, the ONNX technique) is at git tag before-simplify.
+  python3 relay.py toy_unet_tflite --host <Pi's IP> --drop-probability 0.3 --max-drop-run 3   # the frame-loss demo
+  python3 relay.py toy_unet_tflite --input sintel_trailer-480p.mp4 --output fake              # local file, flat out
 """
 from __future__ import annotations  # hints are not evaluated, so they can name classes defined further down
 
@@ -22,7 +22,6 @@ import os
 import sys
 import threading
 import time
-import random
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,17 +44,17 @@ from gi.repository import GLib, Gst, GstApp
 # Math/ML
 import numpy as np
 
-# Random frame dropper class
+# Simulated frame loss for the demo, and how a gap is filled
 from frame_dropper import RandomFrameDropper, gap_fill_plan
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 VIDEOS_DIR = SCRIPT_DIR.parent / "videos"  # streaming/videos
 MODELS_DIR = SCRIPT_DIR.parent.parent / "artifacts"  # machine-learning/artifacts
 
-# The U-Net trained on video-range grey (scripts/training.py --range video): the decoder's luma plane is video range
-# (16-235), so frames go to the model and back to the encoder without any range conversion. Same accuracy as the
-# full-range model (scripts/compare_range.py).
-TFLITE_MODEL_PATH = str(MODELS_DIR / "toy_unet_int8_video.tflite")
+# The VFI U-Net (scripts/export_tflite.py): INT8 per-tensor, trained on video-range grey (16-235), which is what the
+# decoder's luma plane holds, so frames go to the model and back to the encoder without any range conversion. Its
+# output is the average of the two frames plus a learned correction.
+TFLITE_MODEL_PATH = str(MODELS_DIR / "vfi_unet.tflite")
 VX_DELEGATE_PATH = "/usr/lib/libvx_delegate.so"  # board-only -- NXP's eIQ NPU delegate for TIM-VX
 CPU_THREADS = 4  # TFLite threads when the model runs on the CPU (--inference cpu): all four A53 cores
 # The NPU driver can save its compiled graph (*.nb) here and reuse it on later runs, skipping the
@@ -93,8 +92,8 @@ def parse_args() -> argparse.Namespace:
 	# Hardware offloading/configuration
 	parser.add_argument("--decoder", choices=["auto", "cpu", "vpu"], default="auto",
 	                    help="H.264 decoder: auto = vpu (hardware) if installed, else cpu (avdec_h264)")
-	parser.add_argument("--scaler", choices=["auto", "cpu", "ocl", "g2d"], default="auto",
-	                    help="scale to the model's 448x256 on: ocl (GPU), cpu (videoscale) or g2d (see SCALERS); "
+	parser.add_argument("--scaler", choices=["auto", "cpu", "ocl"], default="auto",
+	                    help="scale to the model's 448x256 on: ocl (GPU) or cpu (videoscale); "
 	                         "auto = ocl after vpudec, else cpu")
 	parser.add_argument("--encoder", choices=["auto", "vpu", "x264", "mpeg4"], default="auto",
 	                    help="re-encode codec: auto = vpu (hardware) if installed, else x264, else mpeg4")
@@ -113,7 +112,7 @@ def parse_args() -> argparse.Namespace:
 	)
 	parser.add_argument(
 		"--output-file", type=Path,
-		default=VIDEOS_DIR / "recovered_random_loss.mp4",
+		default=VIDEOS_DIR / "recovered.mp4",
 		help="MP4 destination when --output file is selected"
 	)
 	parser.add_argument("--no-queues", action="store_true",
@@ -128,13 +127,7 @@ def parse_args() -> argparse.Namespace:
 	                         "3 (a gap of 4, split exactly) is a good largest value")
 	parser.add_argument("--seed", type=int, default=42, help="random seed for reproducible frame loss")
 
-	parser.add_argument(
-		"--recursive-4x",
-		action="store_true",
-		help="Use recursive midpoint VFI to convert 6 FPS input to 24 FPS"
-	)
-
-	parser.add_argument("--model", type=Path, help="toy_unet_tflite model file, instead of the deployed one")
+	parser.add_argument("--model", type=Path, help="toy_unet_tflite model file, instead of artifacts/vfi_unet.tflite")
 
 	args = parser.parse_args()
 	if args.output == "file" and args.encoder == "mpeg4":
@@ -147,12 +140,8 @@ def parse_args() -> argparse.Namespace:
 		parser.error("--drop-probability must be between 0 and 1")
 	if args.max_drop_run < 1:
 		parser.error("--max-drop-run must be at least 1")
-	if args.recursive_4x and args.drop_probability is not None:
-		parser.error("--recursive-4x cannot be combined with random frame loss")
 	if args.drop_probability is not None and args.technique == "passthrough":
 		parser.error("random frame loss recovery requires an interpolation technique")
-	if args.recursive_4x and args.technique == "passthrough":
-		parser.error("--recursive-4x requires an interpolation technique")
 	return args
 
 
@@ -165,7 +154,7 @@ class Passthrough:
 	def __init__(self, appsrc: GstApp.AppSrc | TimedAppsrc) -> None:
 		self.appsrc = appsrc
 
-	def on_new_sample(self, sink: GstApp.AppSink | VideoRangeSink) -> Gst.FlowReturn:
+	def on_new_sample(self, sink: GstApp.AppSink) -> Gst.FlowReturn:
 		sample = sink.pull_sample()
 		if not sample:
 			return Gst.FlowReturn.ERROR
@@ -188,7 +177,7 @@ class Doubler(Passthrough):
 	def middle(self, frame1: np.ndarray, frame2: np.ndarray) -> np.ndarray:
 		raise NotImplementedError
 
-	def on_new_sample(self, sink: GstApp.AppSink | VideoRangeSink) -> Gst.FlowReturn:
+	def on_new_sample(self, sink: GstApp.AppSink) -> Gst.FlowReturn:
 		sample = sink.pull_sample()
 		if not sample:
 			return Gst.FlowReturn.ERROR
@@ -293,61 +282,6 @@ class ToyUnetBlenderTFLite(Doubler):
 		return self.output_lut.take(output_q.view(np.uint8) ^ 128)  # any other output scale: through the table
 
 
-class RecursiveQuadrupler:
-	"""Convert 6 FPS to 24 FPS using recursive midpoint interpolation."""
-
-	FPS_MULTIPLIER = 4
-
-	def __init__(self, technique):
-		self.technique = technique
-		self.appsrc = technique.appsrc
-		self.previous = None
-		self.interpolated = 0
-
-	def on_new_sample(self, sink):
-		sample = sink.pull_sample()
-		if sample is None:
-			return Gst.FlowReturn.ERROR
-
-		current = sample.get_buffer()
-
-		if self.previous is None:
-			self.previous = current
-			return self.appsrc.push_buffer(current)
-
-		previous = self.previous
-
-		# First inference: midpoint at 1/2.
-		mid = self.technique.middle_buffer(previous, current)
-
-		# Second inference: midpoint at 1/4.
-		quarter = self.technique.middle_buffer(previous, mid)
-
-		# Third inference: midpoint at 3/4.
-		three_quarter = self.technique.middle_buffer(mid, current)
-
-		frame_duration = Gst.SECOND // 24
-
-		for generated in (quarter, mid, three_quarter):
-			generated.duration = frame_duration
-		
-		# Push frames in presentation order.
-		for buffer in (quarter, mid, three_quarter, current):
-			result = self.appsrc.push_buffer(buffer)
-			if result != Gst.FlowReturn.OK:
-				return result
-
-		self.previous = current
-		self.interpolated += 3
-		return Gst.FlowReturn.OK
-
-	def on_eos(self, sink):
-		self.appsrc.end_of_stream()
-
-	def report(self):
-		print(f"Recursive VFI generated frames: {self.interpolated}")
-
-
 class RandomLossRecovery:
 	"""Recover simulated frame losses while keeping the 24 fps timeline.
 
@@ -438,54 +372,6 @@ def make_technique(name: str, appsrc: GstApp.AppSrc | TimedAppsrc, inference: st
 	return TECHNIQUES[name](appsrc)
 
 
-# Code for the G2D path
-# The constants and the RangeLookup and VideoRangeSink are relevant when the G2D is used for scaling.
-#
-# The G2D outputs RGB only, so its grey is converted from RGB and comes out full range (0-255).
-# This table compresses it to the video range (16-235) the model takes.
-#
-# The CPU and OCL scalers keep the decoder's YUV, whose luma plane is
-# video range already, so they need no lookup.
-FULL_TO_VIDEO = np.round(16 + np.arange(256) * 219 / 255).astype(np.uint8)
-
-
-class RangeLookup:
-	# Compresses a frame to video range by table lookup, and keeps the total time spent for the end-of-run report.
-	total = 0.0
-	frames = 0
-
-	@classmethod
-	def apply(cls, buf: Gst.Buffer, table: np.ndarray) -> Gst.Buffer:
-		# New buffer with every pixel looked up in table; timestamps carried over.
-		start = time.perf_counter()
-		ok, info = buf.map(Gst.MapFlags.READ)
-		pixels = table[np.frombuffer(info.data, dtype=np.uint8)]
-		buf.unmap(info)
-		out = Gst.Buffer.new_wrapped(pixels.tobytes())
-		out.pts, out.dts, out.duration = buf.pts, buf.dts, buf.duration
-		cls.total += time.perf_counter() - start
-		cls.frames += 1
-		return out
-
-
-class VideoRangeSink:
-	# Stands in for appsink on the G2D chain: the technique pulls samples as usual and gets frames already compressed
-	# to video range. Techniques only call pull_sample().get_buffer(), so that is all this provides.
-	class Sample:
-		def __init__(self, buffer: Gst.Buffer) -> None:
-			self.buffer = buffer
-
-		def get_buffer(self) -> Gst.Buffer:
-			return self.buffer
-
-	def __init__(self, sink: GstApp.AppSink, table: np.ndarray = FULL_TO_VIDEO) -> None:
-		self.sink, self.table = sink, table
-
-	def pull_sample(self) -> VideoRangeSink.Sample | None:
-		sample = self.sink.pull_sample()
-		return self.Sample(RangeLookup.apply(sample.get_buffer(), self.table)) if sample else sample
-
-
 # ---------------------------------------------------------------------------------------------------------------------
 # Pipeline elements
 # ---------------------------------------------------------------------------------------------------------------------
@@ -522,27 +408,18 @@ def make_decoder(choice: str) -> tuple[Gst.Element | None, str]:
 #        whole relay at 480p, and as fast as the others (outputs/relay_scalers: 8.4 ms CPU per relayed frame).
 #   cpu  videoscale on the CPU (default after avdec_h264; OCL is only checked on vpudec's NV12). Keeps YUV, but
 #        12.5 ms CPU per relayed frame after vpudec.
-#   g2d  imxvideoconvert_g2d: the fastest scaler, but it outputs RGB only, so the CPU then converts RGB -> grey
-#        (full range) and looks it up to video range (VideoRangeSink): 9.8 ms CPU per relayed frame.
+# (The G2D was measured too: 9.8 ms, but it outputs RGB only, which then needs a CPU conversion and a range fix.)
 #
 # vpudec pads its frames to a multiple of 16 (480p: 854 -> 864 columns; 1080p: 1080 -> 1088 rows) and marks the real
-# picture with a crop meta. The G2D and OCL honour it; videoscale doesn't and would scale the padding into the
+# picture with a crop meta. The OCL scaler honours it; videoscale doesn't and would scale the padding into the
 # picture, so the cpu scaler crops it off first (videocrop, set from the first caps: see set_crop).
 SCALERS = {
 	"cpu": "videocrop name=crop ! videoscale ! capsfilter caps=video/x-raw,width=448,height=256",
 	"ocl": "imxvideoconvert_ocl ! capsfilter caps=video/x-raw,format=NV12,width=448,height=256",
-	"g2d": "imxvideoconvert_g2d ! capsfilter caps=video/x-raw,width=448,height=256",
 }
 
 # YUV -> GRAY8 takes the luma plane as it is (video range).
-
-# RGB -> GRAY8 on the G2D chain: its colorimetry was chosen by measurement, as the setting whose grey matches 
-# full-range training data; VideoRangeSink then compresses it to video range.
-INPUT_CONVERTERS = {
-	"cpu": "videoconvert ! capsfilter caps=video/x-raw,format=GRAY8",
-	"ocl": "videoconvert ! capsfilter caps=video/x-raw,format=GRAY8",
-	"g2d": "videoconvert ! capsfilter caps=\"video/x-raw,format=GRAY8,colorimetry=2:4:0:0\"",
-}
+INPUT_CONVERTER = "videoconvert ! capsfilter caps=video/x-raw,format=GRAY8"
 
 
 def with_threads(description: str, threads: int) -> str:
@@ -579,9 +456,8 @@ def set_crop(crop: Gst.Element, stream_caps: Gst.Caps, decoded_caps: Gst.Caps) -
 		print(f"Decoder pads its frames: cropping {right} columns and {bottom} rows before scaling")
 
 
-# Matched to the scaler: the format the scaler hands over decides what is left to convert.
-def make_input_converter(scaler_choice: str, threads: int = 1) -> Gst.Bin | None:
-	return make_bin(with_threads(INPUT_CONVERTERS[scaler_choice], threads), "input_converter")
+def make_input_converter(threads: int = 1) -> Gst.Bin | None:
+	return make_bin(with_threads(INPUT_CONVERTER, threads), "input_converter")
 
 
 # GRAY8 -> I420 for the encoder: the grey is video range, so this is a plain copy into the luma plane (chroma
@@ -652,7 +528,7 @@ def build_arm_a(args: argparse.Namespace) -> SimpleNamespace:
 	parser = make_element("h264parse", "parser")
 	decoder, decoder_choice = make_decoder(args.decoder)
 	scaler, scaler_choice = make_scaler(args.scaler, decoder_choice)
-	input_converter = make_input_converter(scaler_choice, args.convert_threads)
+	input_converter = make_input_converter(args.convert_threads)
 	appsink = make_element("appsink", "appsink")
 	# Queues give the step after them their own thread (--no-queues leaves them out, for comparison).
 	decode_queue, vfi_queue = (None, None) if args.no_queues else \
@@ -768,10 +644,6 @@ def build_arm_b(args: argparse.Namespace) -> SimpleNamespace:
 def connect_vfi(a: SimpleNamespace, b: SimpleNamespace, technique: Passthrough, stats: RelayStats,
                 stream_ended: threading.Event) -> None:
 	# Joins the arms: arm A's appsink feeds the technique, which pushes into arm B's appsrc.
-	def on_new_sample(sink: GstApp.AppSink) -> Gst.FlowReturn:
-		# The G2D's grey is full range (it outputs RGB): compressed to the model's video range on the way in.
-		return technique.on_new_sample(VideoRangeSink(sink) if a.scaler_choice == "g2d" else sink)
-
 	# TCP gives a real EOS when the Pi closes its end of the connection cleanly (tcpclientsrc sees
 	# the socket close and pushes EOS downstream) -- unlike UDP, which has no "sender is done"
 	# signal at all. That EOS reaches appsink and fires this handler, which finalizes arm B
@@ -803,7 +675,7 @@ def connect_vfi(a: SimpleNamespace, b: SimpleNamespace, technique: Passthrough, 
 				print(f"Output framerate: {fps_n}/{fps_d}")
 		return Gst.PadProbeReturn.OK
 
-	a.appsink.connect("new-sample", stats.timed_callback(on_new_sample))
+	a.appsink.connect("new-sample", stats.timed_callback(technique.on_new_sample))
 	a.appsink.connect("new-preroll", discard_preroll)
 	a.appsink.connect("eos", on_eos)
 	a.appsink.get_static_pad("sink").add_probe(Gst.PadProbeType.EVENT_DOWNSTREAM, on_appsink_caps)
@@ -992,7 +864,7 @@ class RelayStats:
 			wall_s, cpu_s, board_s = (last - first for first, last in zip(self.first, self.last))
 			print(f"Time from first to last frame relayed: {wall_s:.3f}s")
 			# 100% = one core fully busy (the board has 4). Excludes work in kernel threads and drivers
-			# outside this process (VPU/G2D/NPU hardware time is not CPU time at all).
+			# outside this process (VPU/GPU/NPU hardware time is not CPU time at all).
 			if wall_s > 0:
 				print(f"Relay CPU time: {cpu_s:.2f}s = {cpu_s / wall_s * 100:.0f}% of one core, "
 				      f"{cpu_s / (self.relayed - 1) * 1000:.2f} ms per relayed frame")
@@ -1000,19 +872,12 @@ class RelayStats:
 		else:
 			print("No frames were relayed.")
 
-		# RandomLossRecovery and RecursiveQuadrupler wrap the original VFI technique: the model is inside
-		model = (
-			technique.technique
-			if isinstance(technique, (RandomLossRecovery, RecursiveQuadrupler))
-			else technique
-		)
+		# RandomLossRecovery wraps the VFI technique: the model is inside
+		model = technique.technique if isinstance(technique, RandomLossRecovery) else technique
 		# Only toy_unet_tflite has an inference step to report.
 		if getattr(model, "infer_calls", 0) > 0:
 			stats["infer_ms"] = model.total_infer_time / model.infer_calls * 1000
 			print(f"Mean inference latency ({model.infer_calls} calls): {stats['infer_ms']:.2f} ms/frame")
-		if RangeLookup.frames:
-			stats["lookup_ms"] = RangeLookup.total / RangeLookup.frames * 1000
-			print(f"Mean range lookup: {stats['lookup_ms']:.2f} ms/frame ({RangeLookup.frames} frames)")
 		if self.arrived:
 			stats["vfi_ms"] = (self.callback_time - appsrc.push_time) / self.arrived * 1000
 		stats.update(scale_convert_ms=scale_timer.ms(), encode_ms=encode_timer.ms(),
@@ -1042,9 +907,7 @@ def main() -> None:
 	# Final setup
 	technique = make_technique(args.technique, appsrc, args.inference)
 
-	if args.recursive_4x:
-		technique = RecursiveQuadrupler(technique)
-	elif args.drop_probability is not None:
+	if args.drop_probability is not None:
 		technique = RandomLossRecovery(technique, probability=args.drop_probability, seed=args.seed,
 		                               max_run=args.max_drop_run)
 
@@ -1068,14 +931,10 @@ def main() -> None:
 	a.pipeline.set_state(Gst.State.NULL)
 	b.pipeline.set_state(Gst.State.NULL)
 
-	# Report statistics for the technique and the loss recovery or recursive VFI (if used)
 	stats.report(technique, appsrc, scale_timer, encode_timer)
-
-	if isinstance(technique, (RandomLossRecovery, RecursiveQuadrupler)):
+	if isinstance(technique, RandomLossRecovery):
 		technique.report()
-
 	print("Relay finished.")
-
 
 
 if __name__ == "__main__":

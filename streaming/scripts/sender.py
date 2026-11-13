@@ -12,7 +12,7 @@ from gi.repository import Gst
 SCRIPT_DIR = Path(__file__).resolve().parent
 VIDEOS_DIR = SCRIPT_DIR.parent / "videos"
 
-DEFAULT_VIDEO = "sintel_trailer-480p-12fps.mp4"
+DEFAULT_VIDEO = "sintel_trailer-480p.mp4"
 
 Gst.init(None)
 
@@ -46,8 +46,7 @@ parser_args = argparse.ArgumentParser()
 parser_args.add_argument("--host", default="0.0.0.0", help="address to listen on (0.0.0.0 = all interfaces)")
 parser_args.add_argument("--port", type=int, default=5000)
 parser_args.add_argument("--video", default=DEFAULT_VIDEO,
-                         help="file in streaming/videos to send, e.g. sintel_trailer-480p-12fps.mp4 "
-                              "(made by make_lossy_video.sh) for the 12 -> 24 fps demo")
+                         help="file in streaming/videos to send (H.264 MP4)")
 args = parser_args.parse_args()
 
 # TCP variant: swaps rtph264pay/udpsink for mpegtsmux/tcpserversink. RTP's

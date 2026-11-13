@@ -1,12 +1,12 @@
-# What does each offload buy in the real relay, with the model? relay.py runs flat out from the 480p 12 fps trailer
+# What does each offload buy in the real relay, with the model? relay.py runs flat out from the 480p 24 fps trailer
 # (--input, --output fake), moving one step at a time off the CPU, each stage without and with queues:
 #   all CPU        avdec_h264, videoscale, the model on the CPU (TFLite, 4 threads), x264enc
 #   + VPU decode   vpudec
-#   + GPU scale    imxvideoconvert_ocl (--hw-scaler g2d for the G2D instead)
+#   + GPU scale    imxvideoconvert_ocl
 #   + NPU          the model on the NPU (vx_delegate)
 #   + VPU encode   vpuenc_h264: the relay's default path, the baseline
 #
-# Run on the iMX8: python3 streaming/scripts/test/relay_bench.py [--repeats 2] [--hw-scaler ocl|g2d] [--match TEXT]
+# Run on the iMX8: python3 streaming/scripts/test/relay_bench.py [--repeats 2] [--match TEXT]
 #
 # Every run is its own relay.py process; its relay_stats line gives the wall time from the first to the last
 # encoded frame (start-up, model loading and the NPU warm-up left out), the CPU time over the same span (the
@@ -40,7 +40,8 @@ from pipeline_bench import DECODE, VIDEOS, run
 
 RELAY = Path(__file__).resolve().parent.parent / "relay.py"
 OUT = Path(__file__).resolve().parent.parent.parent.parent / "outputs" / "relay_bench"
-VIDEO = "sintel_trailer-480p-12fps.mp4"
+VIDEO = "sintel_trailer-480p.mp4"
+HW_SCALER = "ocl"  # the scaler of the '+ scale' stages
 OUTPUT_PER_INPUT = 2  # toy_unet_tflite doubles the frame rate
 
 
@@ -82,13 +83,12 @@ def predict(steps, queues):
 def main():
 	parser = argparse.ArgumentParser(description="relay.py with the model, one offload at a time: speed, CPU, steps")
 	parser.add_argument("--repeats", type=int, default=2, help="runs per configuration; the fastest counts")
-	parser.add_argument("--hw-scaler", choices=["ocl", "g2d"], default="ocl", help="scaler of the '+ scale' stage on")
-	parser.add_argument("--frames", type=int, default=626, help="frames in the video")
+	parser.add_argument("--frames", type=int, default=1251, help="frames in the video")
 	parser.add_argument("--match", help="only stages whose name contains this")
 	args = parser.parse_args()
 
 	OUT.mkdir(parents=True, exist_ok=True)
-	stem = OUT / f"relay_bench_{args.hw_scaler}_{time.strftime('%Y%m%d_%H%M%S')}"
+	stem = OUT / f"relay_bench_{HW_SCALER}_{time.strftime('%Y%m%d_%H%M%S')}"
 	out_csv, out_txt = stem.with_suffix(".csv"), stem.with_suffix(".txt")
 	report = []
 
@@ -96,7 +96,7 @@ def main():
 		print(line, flush=True)
 		report.append(line)
 
-	selected = [(name, options) for name, options in stages(args.hw_scaler) if not args.match or args.match in name]
+	selected = [(name, options) for name, options in stages(HW_SCALER) if not args.match or args.match in name]
 	video = VIDEOS / VIDEO
 	decode_ms = {}
 	for dec in sorted({options["decoder"] for _, options in selected}):
@@ -112,7 +112,7 @@ def main():
 		writer = csv.writer(f)
 		writer.writerow(["stage", "decoder", "scaler", "inference", "encoder", "queues", "wall_s", "ms_per_input",
 		                 "predicted_ms", "process_cpu_s", "board_cpu_s", "cpu_ms_per_input", "cores_busy", "infer_ms",
-		                 "lookup_ms", "steps_ms", "queued_steps_ms", "all_runs_wall_s"])
+		                 "steps_ms", "queued_steps_ms", "all_runs_wall_s"])
 		for name, options in selected:
 			steps = None
 			for queues in (False, True):
@@ -132,7 +132,7 @@ def main():
 				writer.writerow([name, options["decoder"], options["scaler"], options["inference"], options["encoder"],
 				                 queues, f"{stats['wall_s']:.3f}", f"{ms:.2f}", f"{predicted:.2f}",
 				                 f"{stats['process_cpu_s']:.2f}", f"{stats['board_cpu_s']:.2f}", f"{cpu_ms:.2f}",
-				                 f"{cores:.2f}", f"{stats.get('infer_ms', 0):.2f}", f"{stats.get('lookup_ms', 0):.2f}",
+				                 f"{cores:.2f}", f"{stats.get('infer_ms', 0):.2f}",
 				                 ";".join(f"{k}={v:.3f}" for k, v in steps.items()),
 				                 ";".join(f"{k}={v:.3f}" for k, v in measured.items()),
 				                 " ".join(f"{s['wall_s']:.2f}" for s in runs)])
