@@ -11,18 +11,20 @@ Videos live in `videos/` (not tracked by git; copy them to each device).
 
 ## Running the demo
 
-The Pi sends the trailer with every other frame dropped (12 fps, made by `scripts/make_lossy_video.sh`); the relay
-doubles it back to 24 fps; `demo_viewer.py` shows the lossy, original and recovered videos side by side.
+The demo shows what the VFI buys: the Pi sends the 24 fps trailer; the relay drops random bursts of 1 to 3 frames after
+decoding (probability 0.3, seed 42) and recovers each lost frame with the U-Net on the NPU; `demo_viewer.py` plays the
+recovered live stream next to the same video with the frames dropped and held (`videos/stuttering_burst.mp4`, made by
+`scripts/make_burst_demo.sh -d`; it must use the relay's drop settings), and optionally the original.
 
 Start them in this order (the relay waits for the VM before connecting to the Pi). The sender and the relay exit
 when the video ends, so restart both before each run.
 
 ```
 # Pi
-scripts/run_sender.sh            # sends videos/sintel_trailer-480p-12fps.mp4 by default
+scripts/run_sender.sh            # sends videos/sintel_trailer-480p.mp4 by default
 # iMX8
-scripts/run_relay.sh             # PI_HOST=<ip> to override the Pi's address
-# VM: press Connect
+scripts/run_relay.sh             # PI_HOST=<ip> for the Pi's address; DROP_PROBABILITY / MAX_DROP_RUN for the losses
+# VM: press Connect (or pass --connect)
 python3 scripts/demo_viewer.py   # --host <iMX8's ip>
 ```
 
@@ -36,7 +38,8 @@ For the hardware acceleration demo, run `scripts/run_demo2.sh cpu` (everything o
 | `sender.py`, `run_sender.sh` | Pi | Waits for the relay to connect, then streams a video file |
 | `relay.py`, `run_relay.sh` | iMX8 | Decode, scale to 448x256 grey, VFI, re-encode, serve to the VM; `--input FILE --output fake` runs it from a local file, flat out |
 | `run_demo2.sh cpu\|hw` | iMX8 | The relay all on the CPU, or on the accelerators |
-| `demo_viewer.py` | VM | Three-panel window: lossy 12 fps, original 24 fps, recovered 24 fps |
+| `demo_viewer.py` | VM | Two-panel window (a third optional): frames dropped, recovered live, original |
+| `make_burst_demo.sh`, `make_stuttering_baseline.py` | VM | The "frames dropped" baseline video, and a side-by-side comparison, for given drop settings |
 
 ## scripts/test/ (benchmarks and checks, mostly on the iMX8)
 

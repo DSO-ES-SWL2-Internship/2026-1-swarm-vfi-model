@@ -10,7 +10,7 @@
 #   -s  random seed                                                         (default 42)
 #   -i  input video in ../videos, H.264 MP4                                 (default sintel_trailer-480p.mp4)
 #   -t  VFI technique: toy_unet_tflite | linear_blend | frame_hold          (default toy_unet_tflite)
-#   -d  also copy the baseline to ../videos/stuttering_burst.mp4, which demo_viewer.py's "burst" mode plays
+#   -d  also copy the baseline to ../videos/stuttering_burst.mp4, which demo_viewer.py plays as its left panel
 # Output, in ../videos: stuttering_<tag>.mp4, recovered_<tag>.mp4, compare_<tag>.mp4, with tag e.g. p0.3_n3_s42.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -45,7 +45,7 @@ ffmpeg -y -loglevel error -i "$V/stuttering_$TAG.mp4" -i "$V/recovered_$TAG.mp4"
 
 if [[ $VIEWER == 1 ]]; then
 	cp "$V/stuttering_$TAG.mp4" "$V/stuttering_burst.mp4"
-	echo "Copied the baseline to $V/stuttering_burst.mp4 for demo_viewer.py --mode burst"
-	echo "On the board: ./run_relay.sh --drop-probability $P --max-drop-run $N --seed $SEED"
+	echo "Copied the baseline to $V/stuttering_burst.mp4 for demo_viewer.py (python3 demo_viewer.py --connect)"
+	echo "On the board (the relay's defaults are probability 0.3, max run 3, seed 42): DROP_PROBABILITY=$P MAX_DROP_RUN=$N ./run_relay.sh --seed $SEED"
 fi
 echo "Done: $V/compare_$TAG.mp4"

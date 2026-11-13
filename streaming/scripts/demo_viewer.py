@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""Three-device VFI demo viewer (VM).
+"""Frame-loss demo viewer (runs on the VM): can the VFI recover frames that were lost?
 
-The recovered panel is LIVE MPEG-TS/TCP from the i.MX8. Baseline and original
-panels are local MP4 files; all panels are displayed in grayscale by default.
-This viewer does not configure the Pi or relay and is approximately, not
-frame-exactly, synchronized with the live network stream.
+Two panels side by side (a third, the original, can be shown):
+  Without VFI  the trailer with bursts of frames dropped, each dropped frame replaced by the previous one
+               (videos/stuttering_burst.mp4, made by make_burst_demo.sh -d from the relay's drop settings)
+  With VFI     the live MPEG-TS/TCP stream from the i.MX8 relay, which drops the same frames and recovers them
+  Original     the trailer as it was (videos/sintel_trailer-480p.mp4), hidden at the start
+
+All panels are shown the way the model sees them (448x256, grey). The local videos start when the first recovered
+frame arrives, so the panels run roughly together; this is not frame-exact. The viewer does not configure the Pi or
+the relay: start them first (run_sender.sh, run_relay.sh), then Connect.
 """
 import argparse
 import time
@@ -16,17 +21,9 @@ gi.require_version('Gtk', '3.0')
 from gi.repository import GLib, Gst, Gtk
 
 VIDEOS = Path(__file__).resolve().parent.parent / 'videos'
+BASELINE = 'stuttering_burst.mp4'
+ORIGINAL = 'sintel_trailer-480p.mp4'
 SIZE = 'video/x-raw,width=448,height=256'
-MODES = {
-    'original': ('Original 12 to 24 FPS', 'sintel_trailer-{res}-12fps.mp4',
-                 'sintel_trailer-{res}.mp4', '12 FPS input'),
-    'random': ('Random isolated frame-loss recovery', 'stuttering_p50.mp4',
-               'sintel_trailer-480p.mp4', 'Frame-held 24 FPS baseline'),
-    'burst': ('Burst frame-loss recovery', 'stuttering_burst.mp4',
-              'sintel_trailer-480p.mp4', 'Frame-held 24 FPS baseline'),
-    'recursive': ('Recursive 6 to 24 FPS', 'framehold_6to24.mp4',
-                  'sintel_trailer-480p.mp4', '6 FPS frame-held at 24 FPS'),
-}
 
 
 def quote_gst(value):
@@ -106,11 +103,12 @@ class Side:
 
 class DemoWindow(Gtk.Window):
     def __init__(self, args):
-        super().__init__(title='VFI demonstration - Pi to i.MX8 to VM')
+        super().__init__(title='VFI demo: recovering lost frames (Pi to i.MX8 to VM)')
         self.connect('destroy', self.quit)
-        self.args = args
-        self.baseline = Side('Without VFI', args.scale)
-        self.recovered = Side('With VFI', args.scale)
+        self.baseline_file = VIDEOS / args.baseline
+        self.original_file = VIDEOS / ORIGINAL
+        self.baseline = Side('Without VFI (frames dropped)', args.scale)
+        self.recovered = Side('With VFI (recovered live)', args.scale)
         self.original = Side('Original 24 FPS reference', args.scale)
         self.sides = [self.baseline, self.recovered, self.original]
         self.panel_spacing = 12
@@ -118,27 +116,18 @@ class DemoWindow(Gtk.Window):
         self.host = Gtk.Entry(text=args.host, width_chars=15)
         self.port = Gtk.SpinButton.new_with_range(1, 65535, 1)
         self.port.set_value(args.port)
-        self.mode = Gtk.ComboBoxText()
-        for key, (title, *_rest) in MODES.items():
-            self.mode.append(key, title)
-        self.mode.set_active_id(args.mode)
-        self.mode.connect('changed', self.on_mode_changed)
-        self.colour = Gtk.CheckButton(label='Colour (disable grayscale)')
-        self.colour.set_active(args.colour)
-        self.colour.connect('toggled', self.on_colour_changed)
         connect = Gtk.Button(label='Connect')
         connect.connect('clicked', self.on_connect)
         stop = Gtk.Button(label='Stop')
         stop.connect('clicked', lambda _b: self.stop_all('Stopped.'))
-        self.status = Gtk.Label(label='Start Pi sender and i.MX8 relay, then Connect.', xalign=0)
+        self.status = Gtk.Label(label='Start the Pi sender and the i.MX8 relay, then Connect.', xalign=0)
         self.status.set_line_wrap(True)
         controls = Gtk.Box(spacing=8)
-        for item in (Gtk.Label(label='Mode'), self.mode, Gtk.Label(label='i.MX8'),
-                     self.host, Gtk.Label(label='Port'), self.port, self.colour, connect, stop):
+        for item in (Gtk.Label(label='i.MX8'), self.host, Gtk.Label(label='Port'), self.port, connect, stop):
             controls.pack_start(item, False, False, 0)
         shows = Gtk.Box(spacing=8)
         shows.pack_start(Gtk.Label(label='Show:'), False, False, 0)
-        for side, label in zip(self.sides, ('Baseline', 'Recovered', 'Original')):
+        for side, label in zip(self.sides, ('Without VFI', 'With VFI', 'Original')):
             check = Gtk.CheckButton(label=label)
             check.set_active(label != 'Original')
             check.connect('toggled', self.on_show, side)
@@ -154,39 +143,13 @@ class DemoWindow(Gtk.Window):
         for item, expand in ((controls, False), (shows, False), (panels, True), (self.status, False)):
             layout.pack_start(item, expand, expand, 0)
         self.add(layout)
-        self.update_titles()
         GLib.timeout_add(500, self.tick)
         GLib.idle_add(self.fit_window_to_panels)
 
-    def selected_files(self):
-        mode = self.mode.get_active_id()
-        _title, baseline, original, _label = MODES[mode]
-        return (VIDEOS / baseline.format(res=self.args.res),
-                VIDEOS / original.format(res=self.args.res))
-
-    def update_titles(self):
-        mode = self.mode.get_active_id()
-        title, _baseline, _original, label = MODES[mode]
-        self.set_title(f'VFI demo: {title}')
-        self.baseline.caption.set_text('Without VFI')
-        self.recovered.caption.set_text('With VFI')
-        self.original.caption.set_text('Original 24 FPS reference')
-
-    def on_mode_changed(self, _widget):
-        self.stop_all('Mode changed. Configure sender/relay for this mode, then Connect.')
-        self.update_titles()
-
-    def on_colour_changed(self, _widget):
-        self.stop_all('Display colour changed. Press Connect to restart.')
-
     def fit_window_to_panels(self):
         """Fit window to visible fixed-aspect panels, subject to control-bar width."""
-        visible = sum(side.box.get_visible() for side in self.sides)
-        if not visible:
-            visible = 1
-        width = (visible * self.baseline.width +
-                 (visible - 1) * self.panel_spacing +
-                 2 * self.window_margin)
+        visible = sum(side.box.get_visible() for side in self.sides) or 1
+        width = visible * self.baseline.width + (visible - 1) * self.panel_spacing + 2 * self.window_margin
         # GTK may impose a wider minimum due to the controls; panels stay fixed.
         self.resize(width, self.baseline.height + 135)
         return False
@@ -195,19 +158,17 @@ class DemoWindow(Gtk.Window):
         side.box.set_visible(button.get_active())
         GLib.idle_add(self.fit_window_to_panels)
 
-    def display_chain(self):
-        # Keep grayscale conversion after decoding, on ALL panels.
-        if self.colour.get_active():
-            return f'videoconvert ! videoscale ! {SIZE} ! videoconvert ! '
-        return (f'videoconvert ! videoscale ! {SIZE} ! '
-                'videoconvert ! video/x-raw,format=GRAY8 ! videoconvert ! ')
+    @staticmethod
+    def display_chain():
+        # Scale to the model's size and show grey, on ALL panels.
+        return f'videoconvert ! videoscale ! {SIZE} ! videoconvert ! video/x-raw,format=GRAY8 ! videoconvert ! '
 
     def on_connect(self, _button):
         self.stop_all()
-        baseline, original = self.selected_files()
-        missing = [str(p) for p in (baseline, original) if not p.is_file()]
+        missing = [str(p) for p in (self.baseline_file, self.original_file) if not p.is_file()]
         if missing:
-            self.status.set_text('Missing local video(s): ' + ', '.join(missing))
+            self.status.set_text('Missing local video(s): ' + ', '.join(missing) +
+                                 ' (make_burst_demo.sh -d makes the baseline)')
             return
         host = self.host.get_text().strip()
         port = int(self.port.get_value())
@@ -227,13 +188,10 @@ class DemoWindow(Gtk.Window):
     def start_local(self):
         # Triggered on first recovered frame. This is approximate synchronization,
         # not frame-accurate alignment to the network stream's original PTS.
-        baseline, original = self.selected_files()
         try:
-            for side, path in ((self.baseline, baseline), (self.original, original)):
-                pipeline = (f'filesrc location={quote_gst(path)} ! '
-                            f'decodebin ! {self.display_chain()}'
-                            'gtksink name=sink sync=true')
-                side.start(pipeline)
+            for side, path in ((self.baseline, self.baseline_file), (self.original, self.original_file)):
+                side.start(f'filesrc location={quote_gst(path)} ! decodebin ! {self.display_chain()}'
+                           'gtksink name=sink sync=true')
             self.status.set_text('Playing.')
         except (RuntimeError, GLib.Error) as exc:
             self.stop_all(f'Unable to start local video: {exc}')
@@ -256,24 +214,23 @@ class DemoWindow(Gtk.Window):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--host', default='172.20.10.10')
-    parser.add_argument('--port', type=int, default=5001)
-    parser.add_argument('--scale', type=float, default=1.2)
-    parser.add_argument('--res', choices=['480p', '256p'], default='480p',
-                        help='Source resolution for the original 12-to-24 mode')
-    parser.add_argument('--mode', choices=list(MODES), default='random')
-    parser.add_argument('--colour', action='store_true', help='Show colour instead of grayscale')
-    parser.add_argument('--connect', action='store_true', help='Connect at startup')
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--host', default='172.20.10.10', help="the i.MX8's address")
+    parser.add_argument('--port', type=int, default=5001, help="the relay's output port")
+    parser.add_argument('--baseline', default=BASELINE,
+                        help='video in streaming/videos with the same frames dropped as the relay (default %(default)s)')
+    parser.add_argument('--scale', type=float, default=1.2, help='panel size relative to 448x256')
+    parser.add_argument('--connect', action='store_true', help='connect at startup')
     args = parser.parse_args()
     Gst.init(None)
     window = DemoWindow(args)
     window.show_all()
-    window.original.box.hide()  # third panel is optional by default
+    window.original.box.hide()  # the third panel is optional
     GLib.idle_add(window.fit_window_to_panels)
     if args.connect:
         GLib.idle_add(window.on_connect, None)
     Gtk.main()
+
 
 if __name__ == '__main__':
     main()
