@@ -38,17 +38,14 @@ For the hardware acceleration demo, run `scripts/run_demo2.sh cpu` (everything o
 | `sender.py`, `run_sender.sh` | Pi | Waits for the relay to connect, then streams a video file |
 | `relay.py`, `run_relay.sh` | iMX8 | Decode, scale to 448x256 grey, VFI, re-encode, serve to the VM; `--input FILE --output fake` runs it from a local file, flat out |
 | `run_demo2.sh cpu\|hw` | iMX8 | The relay all on the CPU, or on the accelerators |
+| `frame_dropper.py` | iMX8, VM | The random bursts of lost frames, and how a gap is filled; shared by the relay and the baseline video |
+| `hw_monitor.py` | iMX8 | Live CPU / GPU / NPU / VPU load, beside any pipeline (run it in a second window during the demo) |
 | `demo_viewer.py` | VM | Two-panel window (a third optional): frames dropped, recovered live, original |
 | `make_burst_demo.sh`, `make_stuttering_baseline.py` | VM | The "frames dropped" baseline video, and a side-by-side comparison, for given drop settings |
 
-## scripts/test/ (benchmarks and checks, mostly on the iMX8)
+`tests/test_frame_dropper.py` checks the dropper (run it with `python3 tests/test_frame_dropper.py`).
 
-| Script | What it does |
-| --- | --- |
-| `relay_bench.py` | The relay with the model, one offload at a time, without and with queues -> `outputs/relay_bench/` |
-| `pipeline_bench.py` | decode -> scale -> encode on CPU / VPU / G2D, without and with queues, with per-step predictions |
-| `codec_suite.py`, `plot_codec_suite.py`, `plot_utilisation.py` | Codec and scaler combinations at each resolution: speed, CPU time, utilisation (plots on the VM) |
-| `trace_buffers.py`, `scaler_tlb.py` | Frame memory per hand-over between units; why the CPU scaler is slower on VPU frames |
-| `test_g2d_colour.sh` | Which colorimetry setting gives the right grey on the G2D path |
-| `hw_monitor.py` | Live CPU / GPU / NPU / VPU load, beside any pipeline |
-| `compare_videos.sh` | Plays an original and a received video side by side |
+## experiments/
+
+The pipeline benchmarks behind the optimisation results (offloading to the VPU, GPU and NPU), mostly run on the iMX8;
+see `experiments/README.md`.
