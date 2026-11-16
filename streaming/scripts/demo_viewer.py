@@ -12,7 +12,6 @@ frame arrives, so the panels run roughly together; this is not frame-exact. The 
 the relay: start them first (run_sender.sh, run_relay.sh), then Connect.
 """
 import argparse
-import time
 from pathlib import Path
 
 import gi
@@ -35,11 +34,10 @@ class Side:
     def __init__(self, title, scale):
         self.width, self.height = int(448 * scale), int(256 * scale)
         self.pipeline = None
-        self.frames = self.window_frames = 0
-        self.window_start = time.monotonic()
+        self.got_frame = False
         self.first_frame_callback = None
         self.caption = Gtk.Label(label=title)
-        self.stats = Gtk.Label(label='-')
+        self.stats = Gtk.Label(label='')  # only 'finished' or an error (no frame rate: see the note in on_frame)
         self.slot = Gtk.Box()
         self.slot.set_size_request(self.width, self.height)
         self.box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -59,8 +57,8 @@ class Side:
         widget.set_size_request(self.width, self.height)
         self.slot.pack_start(widget, True, True, 0)
         widget.show()
-        self.frames = self.window_frames = 0
-        self.window_start = time.monotonic()
+        self.got_frame = False
+        self.stats.set_text('')
         self.first_frame_callback = on_first_frame
         sink.get_static_pad('sink').add_probe(Gst.PadProbeType.BUFFER, self.on_frame)
         bus = self.pipeline.get_bus()
@@ -71,28 +69,22 @@ class Side:
             raise RuntimeError('Could not start GStreamer pipeline')
 
     def on_frame(self, pad, info):
-        self.frames += 1
-        self.window_frames += 1
-        if self.frames == 1 and self.first_frame_callback:
-            GLib.idle_add(self.first_frame_callback)
+        # No frame count or fps is shown: the live panel is not clocked (sync=false) and the baseline holds frames, so a
+        # count of frames reaching the sink says nothing about how smooth the video is.
+        if not self.got_frame:
+            self.got_frame = True
+            if self.first_frame_callback:
+                GLib.idle_add(self.first_frame_callback)
         return Gst.PadProbeReturn.OK
 
     def on_eos(self, bus, msg):
-        self.stats.set_text(f'{self.frames} frames - finished')
+        self.stats.set_text('finished')
 
     def on_error(self, bus, msg):
         err, debug = msg.parse_error()
         self.stats.set_text(f'Error: {err.message}')
         print(f'{self.caption.get_text()}: {err.message}\n{debug or ""}')
         self.stop()
-
-    def update_stats(self):
-        now = time.monotonic()
-        elapsed = now - self.window_start
-        if self.pipeline and elapsed >= 1:
-            self.stats.set_text(f'{self.frames} frames, {self.window_frames / elapsed:.1f} fps')
-            self.window_frames = 0
-            self.window_start = now
 
     def stop(self):
         if self.pipeline:
@@ -143,7 +135,6 @@ class DemoWindow(Gtk.Window):
         for item, expand in ((controls, False), (shows, False), (panels, True), (self.status, False)):
             layout.pack_start(item, expand, expand, 0)
         self.add(layout)
-        GLib.timeout_add(500, self.tick)
         GLib.idle_add(self.fit_window_to_panels)
 
     def fit_window_to_panels(self):
@@ -202,11 +193,6 @@ class DemoWindow(Gtk.Window):
             side.stop()
         if message:
             self.status.set_text(message)
-
-    def tick(self):
-        for side in self.sides:
-            side.update_stats()
-        return True
 
     def quit(self, *_args):
         self.stop_all()
