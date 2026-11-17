@@ -129,13 +129,3 @@ python3 relay.py toy_unet_tflite --host <pi ip> --drop-probability 0.3 --max-dro
 When it finishes, the relay prints a `relay_stats` line with the wall time, the CPU time of the relay and of the whole
 board, the model time per call, and the average time per frame in each step. `streaming/experiments/relay_bench.py`
 runs the relay with one offload added at a time and tabulates those numbers.
-
-## Gotchas we hit
-
-- **The demuxer's output pad appears late.** `tsdemux` only creates its output once it has parsed the stream, so the
-  link to `h264parse` is made in a `pad-added` callback.
-- **`appsink` delivers the first frame twice** (once as a preroll sample, then as a normal one). Using both pushed
-  frame 0 twice and broke the timestamps, so the preroll copy is discarded.
-- **A missing timestamp is an error.** The gap detection needs a timestamp on every frame.
-- **Do not trust a frame count on the VM side.** The viewer's live panel is not clocked, so a frame count says nothing
-  about how smooth the video is. The viewer shows none for that reason.

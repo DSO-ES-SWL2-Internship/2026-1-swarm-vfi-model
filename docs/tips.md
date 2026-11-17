@@ -1,6 +1,17 @@
-# Tips and troubleshooting
+# Tips
+
+This page provides several tips for smoother/easier development, as well as some ideas for troubleshooting problems that were faced during development for this project.
 
 Most problems on this project fall into a handful of groups. Find your symptom first.
+
+## Habits that saved time
+
+- **Check the board with `benchmark_model` first** after any change to the model or the image. It takes a minute and
+  tells you whether the NPU works.
+- **Change one thing at a time**, both when training and when measuring.
+- **Measure before you believe.** Time a change before you assume it helps.
+- **Write down the settings with every number.** Frames per second means little without the resolution, the delegate
+  and the number of threads.
 
 ## The board does not answer SSH
 
@@ -48,11 +59,4 @@ read them as "is it working", not as a percentage.
 - The code targets **Python 3.10**. In an f-string, you cannot use a backslash inside the braces.
 - Training takes about 20 minutes on a CPU. Run long jobs with `setsid nohup` so they survive a closed terminal.
 
-## Habits that saved time
 
-- **Check the board with `benchmark_model` first** after any change to the model or the image. It takes a minute and
-  tells you whether the NPU works.
-- **Change one thing at a time**, both when training and when measuring.
-- **Measure before you believe.** Time a change before you assume it helps.
-- **Write down the settings with every number.** Frames per second means little without the resolution, the delegate
-  and the number of threads.
