@@ -1,4 +1,4 @@
-# scripts/
+# model/
 
 Training, export and evaluation of the VFI U-Net, and the hardware measurements behind the project. The streaming
 pipeline (Pi -> iMX8 -> VM) lives in `../streaming/`.
@@ -13,6 +13,8 @@ The U-Net takes the frames before and after (2 channels, 448x256, grey, video ra
 plus a learned correction (`model.py`). Trained on frames of open Blender films (more motion) mixed with Vimeo-90K
 triplets; scored on held-out Vimeo triplets and on clips of the Sintel trailer (the demo's own film, never trained on).
 
+## Directory
+
 | Script | What it does |
 | --- | --- |
 | `model.py` | The architecture, the loss, and the paths of the trained model and its export |
@@ -23,11 +25,14 @@ triplets; scored on held-out Vimeo triplets and on clips of the Sintel trailer (
 | `evaluate.py` | PSNR, SSIM and LPIPS on the test sets, beside frame hold and linear blend |
 | `experiments/run_experiments.sh` | The runs behind the choices (output type, data, seeds, width, loss), one change at a time |
 
-Training data: download the three films to `datasets/blender/{bbb,ed,tos}/` (Big Buck Bunny 480p, Elephants Dream 480p,
-Tears of Steel 720p, all from download.blender.org, CC BY, (c) Blender Foundation), then `python3 blender_triplets.py`
+## Preparing the training and test data
+1. Download the three films to `datasets/blender/{bbb,ed,tos}/` (Big Buck Bunny 480p, Elephants Dream 480p,
+Tears of Steel 720p, all from download.blender.org, CC BY, (c) Blender Foundation), 
+2. `python3 blender_triplets.py`
 decodes them (about 90 s) into `datasets/blender/frames/` (5 GB, can be deleted: it is rebuilt from the films) and picks
-the training windows. Vimeo-90K triplets go in `datasets/vimeo90k/`; the train/val/eval split lists are `../splits/`.
-Evaluation needs `../streaming/videos/sintel_trailer-480p.mp4`.
+the training windows. 
+3. Vimeo-90K triplets go in `datasets/vimeo90k/`; the train/val/eval split lists are `../splits/`.
+4. Evaluation needs `../streaming/videos/sintel_trailer-480p.mp4`.
 
 ## Experiments and hardware measurements
 
@@ -39,6 +44,3 @@ Evaluation needs `../streaming/videos/sintel_trailer-480p.mp4`.
 | `experiments/benchmarks/benchmark_backends.sh [model.tflite ...]` | On the iMX8: CPU vs NPU vs GPU average inference time (default: the deployed model) -> `outputs/benchmarks/` |
 | `experiments/benchmarks/plot_gpu_layers.py <results.txt> <out.png>` | Plots the single-layer times from `benchmark_backends.sh` |
 | `cpp/` | C++ inference test (cross-compiled with the Yocto SDK): the same model through TFLite's C++ API |
-
-Re-run `experiments/compare_quantization.py` (accuracy) and `experiments/benchmarks/benchmark_backends.sh` (speed) whenever the model or its
-export settings change. Video codec and pipeline benchmarks are in `../streaming/experiments/`.

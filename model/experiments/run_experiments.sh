@@ -9,7 +9,7 @@
 #   seed check (a gain only counts if it beats the spread between seeds): a3 and a0 again with --seed 1
 #   from a3, one change each: a4 width 1.5x, a5 gradient (sharpness) loss 0.5, a6 width 2x (collapsed to the blend)
 # Usage: experiments/run_experiments.sh [2x2 | seed | extras]     (several runs back to back; log in ../artifacts/experiments/ladder.log)
-cd "$(dirname "$0")/.."  # scripts/, where train.py is
+cd "$(dirname "$0")/.."  # model/, where train.py is
 export TF_CPP_MIN_LOG_LEVEL=2
 PY="${PY:-$HOME/vfi-env/bin/python}"  # the venv with TensorFlow, also when started without it activated
 mkdir -p ../artifacts/experiments

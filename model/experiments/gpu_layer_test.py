@@ -8,7 +8,7 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # scripts/: model, data, evaluate, export_tflite
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # model/: model, data, evaluate, export_tflite
 
 import numpy as np
 import tensorflow as tf
