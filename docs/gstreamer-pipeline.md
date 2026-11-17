@@ -95,12 +95,13 @@ A GStreamer pipeline runs in one thread unless something splits it. A `queue` do
 own thread. So with the queues, **decoding, scaling and the model run in parallel**, each working on a different
 frame, instead of one after the other.
 
-```text
-without queues:   [decode][scale][model][encode]  [decode][scale][model][encode] ...   time per frame = SUM of the steps
-with queues:      [decode]  [decode]  [decode]
-                         [scale]  [scale]  [scale]                                     time per frame = the SLOWEST step
-                                [model]  [model]
-```
+<div class="diagram" markdown="0">
+--8<-- "assets/diagrams/threads-queues.svg"
+</div>
+
+Both timelines use the same time scale, and the length of each step is only illustrative. Without queues, a frame is
+finished only after all four steps. With queues, each step starts on the next frame as soon as it is free, so once the
+pipeline is full a finished frame leaves every time the slowest step finishes one.
 
 This is the idea behind the offloading: a faster step helps only if it was the slowest one.
 

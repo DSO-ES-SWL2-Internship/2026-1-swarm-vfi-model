@@ -12,3 +12,16 @@
 .d-text { fill: var(--md-default-fg-color); font-family: var(--md-text-font-family, sans-serif); font-size: 14px; text-anchor: middle; }
 .d-text.d-sub { fill: var(--md-default-fg-color--light); font-size: 12px; }
 .d-label { fill: var(--md-default-fg-color--light); font-family: var(--md-text-font-family, sans-serif); font-size: 13px; font-weight: 600; }
+
+/* Threads-and-queues timeline */
+.d-step { stroke: none; }
+.d-step0 { fill: #8a63d2; } .d-step1 { fill: #2f6fed; } .d-step2 { fill: #e5484d; } .d-step3 { fill: #1f9d55; }
+.d-blk { fill: #fff; font-family: var(--md-text-font-family, sans-serif); font-size: 12px; text-anchor: middle; }
+.d-grid { stroke: var(--md-default-fg-color--lightest); stroke-width: 1; }
+.d-done { stroke: var(--md-default-fg-color--light); stroke-width: 1; stroke-dasharray: 3 3; }
+.d-line.d-plain { stroke: var(--md-default-fg-color--light); }
+.d-text.d-left { text-anchor: start; }
+.d-rowlabel { font-size: 13px; }
+
+/* The NPU is the focus of the SoC diagram */
+.d-box.focus { stroke-width: 3; fill: color-mix(in srgb, var(--md-accent-fg-color) 16%, var(--md-code-bg-color)); }

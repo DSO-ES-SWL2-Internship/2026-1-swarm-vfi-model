@@ -1,0 +1,71 @@
+<svg class="d-svg" viewBox="0 0 1000 540" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Block diagram of the i.MX 8M Plus: CPU, Cortex-M7, DSP, GPU, VPU, NPU and ISP around an interconnect and the DRAM">
+  <title>Block diagram of the i.MX 8M Plus: CPU, Cortex-M7, DSP, GPU, VPU, NPU and ISP around an interconnect and the DRAM</title>
+  <defs><marker id="ah-soc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="d-head" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+  <rect class="d-group" x="5" y="5" width="990" height="456" rx="10"/>
+  <text class="d-label" x="983" y="23" style="text-anchor:end">i.MX 8M Plus SoC</text>
+  <rect class="d-box hw" x="15" y="40" width="310" height="85" rx="7"/>
+  <text class="d-text " x="170.0" y="71.5">CPU · 4× Arm Cortex-A53</text>
+  <text class="d-text d-sub" x="170.0" y="86.5">up to 1.8 GHz · runs Linux</text>
+  <text class="d-text d-sub" x="170.0" y="101.5">512 KB shared L2</text>
+  <rect class="d-box " x="335" y="40" width="170" height="85" rx="7"/>
+  <text class="d-text " x="420.0" y="79.0">Cortex-M7</text>
+  <text class="d-text d-sub" x="420.0" y="94.0">800 MHz · real-time</text>
+  <rect class="d-box " x="515" y="40" width="170" height="85" rx="7"/>
+  <text class="d-text " x="600.0" y="79.0">HiFi 4 DSP</text>
+  <text class="d-text d-sub" x="600.0" y="94.0">800 MHz · audio</text>
+  <rect class="d-box " x="695" y="40" width="290" height="85" rx="7"/>
+  <text class="d-text " x="840.0" y="79.0">On-chip RAM</text>
+  <text class="d-text d-sub" x="840.0" y="94.0">868 KB</text>
+  <rect class="d-box " x="15" y="150" width="970" height="32" rx="7"/>
+  <text class="d-text " x="500.0" y="170.0">AXI interconnect · Network-on-Chip (NoC): links every unit to the DRAM</text>
+  <line class="d-line d-plain" x1="170" y1="125" x2="170" y2="150"/>
+  <line class="d-line d-plain" x1="420" y1="125" x2="420" y2="150"/>
+  <line class="d-line d-plain" x1="600" y1="125" x2="600" y2="150"/>
+  <line class="d-line d-plain" x1="840" y1="125" x2="840" y2="150"/>
+  <rect class="d-group" x="15" y="205" width="290" height="160" rx="10"/>
+  <text class="d-label" x="293" y="223" style="text-anchor:end">GPU Mix</text>
+  <rect class="d-box hw" x="25" y="240" width="130" height="110" rx="7"/>
+  <text class="d-text " x="90.0" y="291.5">3D GPU</text>
+  <text class="d-text d-sub" x="90.0" y="306.5">GC7000UL</text>
+  <rect class="d-box " x="165" y="240" width="130" height="110" rx="7"/>
+  <text class="d-text " x="230.0" y="291.5">G2D (2D GPU)</text>
+  <text class="d-text d-sub" x="230.0" y="306.5">GC520L</text>
+  <rect class="d-group" x="315" y="205" width="330" height="160" rx="10"/>
+  <text class="d-label" x="633" y="223" style="text-anchor:end">VPU Mix</text>
+  <rect class="d-box hw" x="325" y="240" width="150" height="110" rx="7"/>
+  <text class="d-text " x="400.0" y="284.0">Decoders (G1, G2)</text>
+  <text class="d-text d-sub" x="400.0" y="299.0">H.264 · H.265</text>
+  <text class="d-text d-sub" x="400.0" y="314.0">VP8 · VP9</text>
+  <rect class="d-box hw" x="485" y="240" width="150" height="110" rx="7"/>
+  <text class="d-text " x="560.0" y="291.5">Encoder (VC8000E)</text>
+  <text class="d-text d-sub" x="560.0" y="306.5">H.264 · H.265</text>
+  <rect class="d-group" x="655" y="205" width="170" height="160" rx="10"/>
+  <text class="d-label" x="813" y="223" style="text-anchor:end">ML Mix</text>
+  <rect class="d-box hw focus" x="665" y="240" width="150" height="110" rx="7"/>
+  <text class="d-text " x="740.0" y="284.0">NPU</text>
+  <text class="d-text d-sub" x="740.0" y="299.0">2.3 TOPS</text>
+  <text class="d-text d-sub" x="740.0" y="314.0">INT8 / INT16</text>
+  <rect class="d-group" x="835" y="205" width="150" height="160" rx="10"/>
+  <text class="d-label" x="973" y="223" style="text-anchor:end">Media Mix</text>
+  <rect class="d-box " x="845" y="240" width="130" height="110" rx="7"/>
+  <text class="d-text " x="910.0" y="291.5">ISP</text>
+  <text class="d-text d-sub" x="910.0" y="306.5">dual camera</text>
+  <line class="d-line d-plain" x1="160" y1="182" x2="160" y2="205"/>
+  <line class="d-line d-plain" x1="480" y1="182" x2="480" y2="205"/>
+  <line class="d-line d-plain" x1="740" y1="182" x2="740" y2="205"/>
+  <line class="d-line d-plain" x1="910" y1="182" x2="910" y2="205"/>
+  <rect class="d-box " x="15" y="392" width="470" height="50" rx="7"/>
+  <text class="d-text " x="250.0" y="421.0">DDR controller · inline ECC</text>
+  <rect class="d-box " x="15" y="482" width="470" height="46" rx="7"/>
+  <text class="d-text " x="250.0" y="501.5">External DRAM</text>
+  <text class="d-text d-sub" x="250.0" y="516.5">32-bit LPDDR4, 4000 MT/s</text>
+  <path class="d-line" d="M250,442 L250,482" marker-end="url(#ah-soc)"/>
+  <rect class="d-box hw" x="560" y="470" width="22" height="16" rx="3"/>
+  <text class="d-text d-sub d-left" x="592" y="483">used in this project</text>
+  <rect class="d-box hw focus" x="560" y="496" width="22" height="16" rx="3"/>
+  <text class="d-text d-sub d-left" x="592" y="509">the focus</text>
+  <rect class="d-box" x="730" y="470" width="22" height="16" rx="3"/>
+  <text class="d-text d-sub d-left" x="762" y="483">not used</text>
+  <rect class="d-group" x="730" y="496" width="22" height="16" rx="3"/>
+  <text class="d-text d-sub d-left" x="762" y="509">power domain</text>
+</svg>

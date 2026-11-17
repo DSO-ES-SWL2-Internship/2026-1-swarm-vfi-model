@@ -1,0 +1,81 @@
+<svg class="d-svg" viewBox="0 0 1000 372" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Without queues the steps run one after another; with queues they overlap and the slowest step sets the pace">
+  <title>Without queues the steps run one after another; with queues they overlap and the slowest step sets the pace</title>
+  <defs><marker id="ah-threads-queues" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="d-head" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+  <text class="d-label" x="10" y="20">Without queues: one thread, the steps run one after another</text>
+  <rect class="d-step d-step0" x="130" y="40" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="162.0" y="57">decode</text>
+  <rect class="d-step d-step1" x="196" y="40" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="228.0" y="57">scale</text>
+  <rect class="d-step d-step2" x="262" y="40" width="130" height="26" rx="4"/>
+  <text class="d-blk" x="327.0" y="57">model</text>
+  <rect class="d-step d-step3" x="394" y="40" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="426.0" y="57">encode</text>
+  <text class="d-text d-sub" x="295" y="34">frame 1</text>
+  <rect class="d-step d-step0" x="460" y="40" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="492.0" y="57">decode</text>
+  <rect class="d-step d-step1" x="526" y="40" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="558.0" y="57">scale</text>
+  <rect class="d-step d-step2" x="592" y="40" width="130" height="26" rx="4"/>
+  <text class="d-blk" x="657.0" y="57">model</text>
+  <rect class="d-step d-step3" x="724" y="40" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="756.0" y="57">encode</text>
+  <text class="d-text d-sub" x="625" y="34">frame 2</text>
+  <rect class="d-step d-step0" x="790" y="40" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="822.0" y="57">decode</text>
+  <rect class="d-step d-step1" x="856" y="40" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="888.0" y="57">scale</text>
+  <text class="d-text d-sub" x="856" y="34">frame 3</text>
+  <text class="d-text" x="936" y="60">…</text>
+  <path class="d-line d-plain" d="M130,84 L130,90 L458,90 L458,84"/>
+  <text class="d-text" x="295" y="108">time per frame = decode + scale + model + encode (the sum)</text>
+  <text class="d-label" x="10" y="144">With queues: a thread per step, so the steps overlap</text>
+  <text class="d-text d-rowlabel" x="118" y="177" style="text-anchor:end">decode</text>
+  <line class="d-grid" x1="130" y1="173" x2="922" y2="173"/>
+  <rect class="d-step d-step0" x="130" y="160" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="162.0" y="177">1</text>
+  <rect class="d-step d-step0" x="196" y="160" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="228.0" y="177">2</text>
+  <rect class="d-step d-step0" x="262" y="160" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="294.0" y="177">3</text>
+  <rect class="d-step d-step0" x="328" y="160" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="360.0" y="177">4</text>
+  <text class="d-text d-rowlabel" x="118" y="211" style="text-anchor:end">scale</text>
+  <line class="d-grid" x1="130" y1="207" x2="922" y2="207"/>
+  <rect class="d-step d-step1" x="196" y="194" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="228.0" y="211">1</text>
+  <rect class="d-step d-step1" x="262" y="194" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="294.0" y="211">2</text>
+  <rect class="d-step d-step1" x="328" y="194" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="360.0" y="211">3</text>
+  <rect class="d-step d-step1" x="394" y="194" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="426.0" y="211">4</text>
+  <text class="d-text d-rowlabel" x="118" y="245" style="text-anchor:end">model</text>
+  <line class="d-grid" x1="130" y1="241" x2="922" y2="241"/>
+  <rect class="d-step d-step2" x="262" y="228" width="130" height="26" rx="4"/>
+  <text class="d-blk" x="327.0" y="245">frame 1</text>
+  <rect class="d-step d-step2" x="394" y="228" width="130" height="26" rx="4"/>
+  <text class="d-blk" x="459.0" y="245">frame 2</text>
+  <rect class="d-step d-step2" x="526" y="228" width="130" height="26" rx="4"/>
+  <text class="d-blk" x="591.0" y="245">frame 3</text>
+  <rect class="d-step d-step2" x="658" y="228" width="130" height="26" rx="4"/>
+  <text class="d-blk" x="723.0" y="245">frame 4</text>
+  <text class="d-text d-rowlabel" x="118" y="279" style="text-anchor:end">encode</text>
+  <line class="d-grid" x1="130" y1="275" x2="922" y2="275"/>
+  <rect class="d-step d-step3" x="394" y="262" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="426.0" y="279">1</text>
+  <rect class="d-step d-step3" x="526" y="262" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="558.0" y="279">2</text>
+  <rect class="d-step d-step3" x="658" y="262" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="690.0" y="279">3</text>
+  <rect class="d-step d-step3" x="790" y="262" width="64" height="26" rx="4"/>
+  <text class="d-blk" x="822.0" y="279">4</text>
+  <text class="d-text d-sub d-left" x="802" y="245">← the slowest step</text>
+  <line class="d-done" x1="459" y1="152" x2="459" y2="292"/>
+  <line class="d-done" x1="591" y1="152" x2="591" y2="292"/>
+  <line class="d-done" x1="723" y1="152" x2="723" y2="292"/>
+  <line class="d-done" x1="855" y1="152" x2="855" y2="292"/>
+  <path class="d-line d-plain" d="M591,300 L591,306 L723,306 L723,300"/>
+  <text class="d-text" x="658" y="326">a frame is finished every 4 units: the time of the slowest step</text>
+  <path class="d-line" d="M130,344 L922,344" marker-end="url(#ah-threads-queues)"/>
+  <text class="d-text d-sub" x="904" y="360">time</text>
+</svg>
