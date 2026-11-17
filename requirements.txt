@@ -1,0 +1,18 @@
+# Python packages for the model scripts (scripts/), on the VM. Versions that were used (Python 3.10).
+tensorflow==2.21.0      # training, the INT8 export, the evaluation (brings keras)
+keras==3.12.4
+numpy==2.2.6
+pillow==12.3.0          # reading the Vimeo-90K frames
+
+# Only for evaluate.py's LPIPS score (skip with --no-lpips). torch must be imported BEFORE tensorflow in one process:
+# the other way round it crashes, which evaluate.py takes care of.
+torch==2.13.0
+lpips==0.1.4
+
+# Only for the plots in the experiments folders
+matplotlib==3.10.9
+
+# Not Python packages, install with the system's package manager:
+#   ffmpeg (blender_triplets.py and the evaluation decode video with it)
+#   GStreamer 1.x with PyGObject (the streaming scripts, on the VM and the iMX8; the board's image has them)
+# scikit-image / opencv are not needed by the main scripts (opencv was used only for an optical-flow comparison).
