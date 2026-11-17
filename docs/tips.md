@@ -19,7 +19,7 @@ The Wi-Fi did not connect by itself on boot. Use the serial console:
 | The viewer connects but no video appears | The sender must be running first. Start in this order: Pi, board, VM |
 | "Address already in use" on port 5001 | A previous relay is still running. `pkill -f relay.py` |
 | "Missing local video(s)" in the viewer | `streaming/videos/stuttering_burst.mp4` is missing. Make it with `make_burst_demo.sh -d` |
-| "Unsupported timestamp gap" | The relay expects 24 fps input, with gaps of at most `max_drop_run + 1` frames |
+| "Unsupported timestamp gap" | The relay expects constant 24 fps input, with gaps of at most `max_drop_run + 1` frames. Convert the video to 24 fps with `ffmpeg -i in.mp4 -vf fps=24 -c:v libx264 -an out.mp4`, and put the result in `streaming/videos/` |
 | The stutter on the left does not match the right | The baseline was made with other drop settings. Make it again with the relay's values (0.3, 3, seed 42) |
 
 !!! warning "Is it the right copy of the code?"
