@@ -59,7 +59,7 @@ nav:
       - Running Demo: run-the-demos.md
   - Key Components:
       - Machine Learning: ml-model.md
-      - The Yocto image: yocto.md
+      - Yocto Setup: yocto.md
       - Application Development: develop-on-board.md
       - The GStreamer pipeline: gstreamer-pipeline.md
   - Tips: tips.md

@@ -10,8 +10,7 @@ what is in it.
 
 ## Yocto in five minutes
 
-Yocto does not give you a Linux. It gives you a *factory* that builds one, from source, for your exact board. Five
-words are enough to read everything below:
+Yocto does not give you a Linux image. It gives you a tool that builds one, for the board to your specifications. Some important keywords:
 
 | Word | What it is |
 | --- | --- |
@@ -103,23 +102,11 @@ This is what we add, grouped by why:
 | Purpose | Packages |
 | --- | --- |
 | Run the model on the NPU | `tensorflow-lite`, `tensorflow-lite-vx-delegate` |
-| Video pipeline | `gstreamer1.0`, `-plugins-base`, `-plugins-good`, `-plugins-bad`, `gstreamer1.0-libav`, `imx-gst1.0-plugin` (the VPU and GPU plugins), `gstreamer1.0-plugins-ugly-x264` |
 | Python for the relay | `python3-pygobject`, `gstreamer1.0-python`, `python3-numpy`, `python3-pillow` |
+| Debugging | `htop`, `perf`, `sysstat`, `gdbserver`, `vim`, `git`, `rsync` |
+| Video pipeline | `gstreamer1.0`, `-plugins-base`, `-plugins-good`, `-plugins-bad`, `gstreamer1.0-libav`, `imx-gst1.0-plugin` (the VPU and GPU plugins), `gstreamer1.0-plugins-ugly-x264` |
 | GPU (OpenCL) | `libopencl-imx`, `clinfo`, `imx-gpu-viv-tools` |
 | Networking | `openssh` (via `EXTRA_IMAGE_FEATURES`), `net-tools`, `avahi-daemon`, `iperf3` |
-| Debugging | `htop`, `perf`, `sysstat`, `gdbserver`, `vim`, `git`, `rsync` |
-
-Three other lines in `local.conf` are worth understanding:
-
-```text
-PACKAGECONFIG:append:pn-gstreamer1.0-plugins-ugly = " x264"
-LICENSE_FLAGS_ACCEPTED += "commercial"
-ACCEPT_FSL_EULA = "1"
-```
-
-- `PACKAGECONFIG` switches a feature on **inside** a package: here, x264 support in the "ugly" plugins.
-- `LICENSE_FLAGS_ACCEPTED` and `ACCEPT_FSL_EULA` are you saying "yes, I accept the licence" for codecs and NXP's
-  licensed software. The build refuses to include them until you do.
 
 **To add a package:** find its recipe name (`bitbake -s | grep <name>`), add it to `IMAGE_INSTALL:append`, run the
 build, reflash.
@@ -163,7 +150,7 @@ at boot needs five pieces:
     repository. Keep a template with placeholders in git, and put the real values in only when you build. Anything
     already committed stays in the git history.
 
-### A boot-time trap: the device tree
+### Configuring for the PCIe controller
 
 The PCIe controller is **disabled** in the board's default device tree. A separate variant, `imx8mp-evk-pcie.dtb`,
 turns it on. U-Boot's default is baked into the U-Boot binary, so fixing it by hand with `setenv` and `saveenv` is
@@ -200,4 +187,4 @@ reflash, instead of fixing the symptom on the board.
 ## Next: build programs for the board
 
 To compile your own C++ for the board **without** rebuilding the image, build the SDK. See
-[Developing on the board](develop-on-board.md#c-with-the-sdk).
+[Developing on the board](develop-on-board.md#method-2-c-with-the-sdk).

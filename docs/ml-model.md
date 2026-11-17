@@ -1,30 +1,46 @@
-# The model
+# Overview
 
-The model is a small U-Net that looks at two video frames and predicts the one **between** them. This page explains
-the idea, how it was trained, and, most importantly, the rules the model must follow to run on the NPU.
+This document aims to answer two questions:
 
-## The idea: a blend plus a correction
+1. How to build a Machine Learning (ML) model for the i.MX8M Plus (with NPU inference support)? (priority)
+2. What is the model that is used for the VFI application?
 
-The simplest way to guess a missing frame is to average the frame before and the frame after. That is a *linear blend*.
-It is sharp where nothing moves and ghosted where something does.
+# Creating the ML Application
 
-The model does not predict the frame from scratch. It starts from the blend and learns only the **difference**:
+## The process in two steps
+
+Building a machine learning model for the i.MX8M Plus takes two steps:
+
+1. **Train it.** Define the model and train it in Python, with the TensorFlow Keras library. The result is a trained
+   Keras model (`.keras`).
+2. **Export it.** Turn the trained model into a TensorFlow Lite file (`.tflite`), quantised to INT8 so it can run on the
+   NPU, and copy it onto the i.MX8. The application loads this file to run inference
+   (see [Developing on the board](develop-on-board.md)).
 
 <div class="diagram" markdown="0">
---8<-- "assets/diagrams/blend-correction.svg"
+--8<-- "assets/diagrams/ml-workflow.svg"
 </div>
 
-That is `output = clip((A + B) / 2 + delta, 0, 1)`.
+**Step 1: Train it.** Decide these things first:
 
-Two details matter:
+- **The type of model.** For the NPU, ask: does the NPU support its operators (check NXP's list of supported operators)?
+  Will it run faster on the NPU (this needs testing)? Is INT8 quantisation suitable for your application, given the
+  accuracy trade-off?
+- **The architecture.** For a neural network: how many layers, and which types of layer.
+- **The data.** Obtain it (collect it yourself, or find it online) and split it into training, validation and test sets.
 
-- **`delta` starts at zero.** Before any training, the model is exactly a plain blend. It can only improve from there,
-  and training only has to learn what the blend gets wrong.
-- **The average is a 1×1 convolution, not a slice.** The two frames are two input channels. A 1×1 convolution with both
-  weights fixed at 0.5 averages them. Because it is just another convolution, the whole graph stays on the NPU.
+Then write and run the training program in Python with TensorFlow Keras, which has simple functions for defining and
+training a model.
 
-The model has about 70 thousand parameters. It works on **448×256 grey** frames in **video range** (16–235), which is
-what the relay's decoder gives it, so no range conversion is needed.
+**Step 2: Export it.** You have a trained Keras model on the VM, and you want a TFLite model on the i.MX8:
+
+- **Convert** the `.keras` file to a `.tflite` file.
+- **Quantise.** The model is trained in FP32 (32-bit floating point), but it is quantised to INT8 to run on the NPU.
+- **Give it a representative dataset.** A small set of real inputs that lets the converter find the range of the values,
+  so it can map FP32 to INT8 properly.
+- **Transfer** the `.tflite` file onto the i.MX8.
+
+The export script is `model/export_tflite.py`. The sections below do both steps for our model.
 
 ## Train it
 
@@ -53,21 +69,6 @@ The choices behind the recipe (the output type, the data, the width, the loss, t
 a time. The runs are listed in `model/experiments/run_experiments.sh`, and their scores are written to
 `artifacts/experiments/`.
 
-## Evaluate it
-
-```bash
-python3 evaluate.py           # PSNR, SSIM and LPIPS against frame hold and linear blend
-```
-
-| Metric | What it tells you |
-| --- | --- |
-| **PSNR** (dB, higher is better) | Are the pixel values close? |
-| **SSIM** (0–1, higher is better) | Does the picture look structurally the same? |
-| **LPIPS** (lower is better) | Do the two images look alike to a neural network trained on human judgements? |
-
-It scores on 40 held-out Vimeo triplets and on 120 clips each of frames 1 and 2 apart from the *Sintel* trailer, the
-demo's own film, which is **never trained on**.
-
 ## Export it for the NPU
 
 ```bash
@@ -94,6 +95,50 @@ The NPU is picky. The export script enforces each of these rules, and each one h
 
 The output scale is set by calibration and is not exactly 1/256, so the relay turns the model's INT8 output into pixels
 with a 256-entry lookup table.
+
+# VFI Application and U-Net
+
+The application in this project is video frame interpolation (VFI). Its model is a small U-Net that looks at two video
+frames and predicts the one **between** them. This section explains the idea behind the model, how its predictions are
+scored, and how to check its speed on the board.
+
+## The idea: a blend plus a correction
+
+The simplest way to guess a missing frame is to average the frame before and the frame after. That is a *linear blend*.
+It is sharp where nothing moves and ghosted where something does.
+
+The model does not predict the frame from scratch. It starts from the blend and learns only the **difference**:
+
+<div class="diagram" markdown="0">
+--8<-- "assets/diagrams/blend-correction.svg"
+</div>
+
+That is `output = clip((A + B) / 2 + delta, 0, 1)`.
+
+Two details matter:
+
+- **`delta` starts at zero.** Before any training, the model is exactly a plain blend. It can only improve from there,
+  and training only has to learn what the blend gets wrong.
+- **The average is a 1×1 convolution, not a slice.** The two frames are two input channels. A 1×1 convolution with both
+  weights fixed at 0.5 averages them. Because it is just another convolution, the whole graph stays on the NPU.
+
+The model has about 70 thousand parameters. It works on **448×256 grey** frames in **video range** (16–235), which is
+what the relay's decoder gives it, so no range conversion is needed.
+
+## Evaluate it
+
+```bash
+python3 evaluate.py           # PSNR, SSIM and LPIPS against frame hold and linear blend
+```
+
+| Metric | What it tells you |
+| --- | --- |
+| **PSNR** (dB, higher is better) | Are the pixel values close? |
+| **SSIM** (0–1, higher is better) | Does the picture look structurally the same? |
+| **LPIPS** (lower is better) | Do the two images look alike to a neural network trained on human judgements? |
+
+It scores on 40 held-out Vimeo triplets and on 120 clips each of frames 1 and 2 apart from the *Sintel* trailer, the
+demo's own film, which is **never trained on**.
 
 ## Checking the speed
 

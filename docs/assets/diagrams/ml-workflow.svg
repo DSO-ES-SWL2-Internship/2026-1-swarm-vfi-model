@@ -1,0 +1,28 @@
+<svg class="d-svg" viewBox="0 0 1000 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Train a model on the VM, export it to a TFLite file, and copy it to the i.MX8 for the application">
+  <title>Train a model on the VM, export it to a TFLite file, and copy it to the i.MX8 for the application</title>
+  <defs><marker id="ah-ml-workflow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="d-head" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+  <rect class="d-group" x="5" y="10" width="690" height="160" rx="10"/>
+  <text class="d-label" x="683" y="28" style="text-anchor:end">On the VM</text>
+  <rect class="d-box " x="25" y="60" width="165" height="80" rx="7"/>
+  <text class="d-text " x="107.5" y="96.5">Model + training data</text>
+  <text class="d-text d-sub" x="107.5" y="111.5">Python, TensorFlow Keras</text>
+  <rect class="d-box " x="280" y="60" width="140" height="80" rx="7"/>
+  <text class="d-text " x="350.0" y="96.5">Trained model</text>
+  <text class="d-text d-sub" x="350.0" y="111.5">.keras · FP32</text>
+  <rect class="d-box hw" x="545" y="60" width="130" height="80" rx="7"/>
+  <text class="d-text " x="610.0" y="96.5">TFLite model</text>
+  <text class="d-text d-sub" x="610.0" y="111.5">.tflite · INT8</text>
+  <path class="d-line" d="M190,100 L280,100" marker-end="url(#ah-ml-workflow)"/>
+  <text class="d-text" x="235" y="88">1. Train</text>
+  <path class="d-line" d="M420,100 L545,100" marker-end="url(#ah-ml-workflow)"/>
+  <text class="d-text" x="482" y="80">2. Export</text>
+  <text class="d-text d-sub" x="482" y="96">quantise to INT8</text>
+  <rect class="d-group" x="715" y="10" width="280" height="160" rx="10"/>
+  <text class="d-label" x="983" y="28" style="text-anchor:end">On the i.MX8</text>
+  <rect class="d-box py" x="745" y="60" width="225" height="80" rx="7"/>
+  <text class="d-text " x="857.5" y="89.0">Application</text>
+  <text class="d-text d-sub" x="857.5" y="104.0">loads the model and runs</text>
+  <text class="d-text d-sub" x="857.5" y="119.0">inference on the NPU</text>
+  <path class="d-line" d="M675,100 L745,100" marker-end="url(#ah-ml-workflow)"/>
+  <text class="d-text d-sub" x="710" y="88">copy</text>
+</svg>
