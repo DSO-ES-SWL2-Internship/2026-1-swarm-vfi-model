@@ -30,20 +30,33 @@ def build_model(width=1.0, residual=True, h=IMG_HEIGHT, w=IMG_WIDTH):
 	"""The U-Net. width scales the channels (16/32/64 at 1.0); residual=False gives a plain sigmoid output instead of
 	the blend plus correction (kept only for the ablation runs). Fully convolutional: h and w can be any multiple of 4."""
 	c1, c2, c3 = (round(c * width) for c in (16, 32, 64))
+	
+	# Inputs
 	inputs = keras.Input(shape=(h, w, 2))
+
+	# Encoder
+	# Conv2d() -- first positional argument is number of filters (output channel), second is kernel_size, e.g. 3 for 3x3 kernel
 	e1 = layers.Conv2D(c1, 3, padding="same", activation="relu")(inputs)
 	e2 = layers.Conv2D(c2, 3, padding="same", activation="relu")(layers.MaxPooling2D(2)(e1))
+	
+	# Bottleneck
 	b = layers.Conv2D(c3, 3, padding="same", activation="relu")(layers.MaxPooling2D(2)(e2))
+	
+	# Decoder with skip connections
 	u2 = layers.Conv2DTranspose(c2, 3, strides=2, padding="same", activation="relu")(b)
 	u2 = layers.Conv2D(c2, 3, padding="same", activation="relu")(layers.Concatenate()([u2, e2]))
 	u1 = layers.Conv2DTranspose(c1, 3, strides=2, padding="same", activation="relu")(u2)
 	u1 = layers.Conv2D(c1, 3, padding="same", activation="relu")(layers.Concatenate()([u1, e1]))
+	
+	# Train to predict from scratch
 	if not residual:
 		return keras.Model(inputs, layers.Conv2D(1, 3, padding="same", activation="sigmoid")(u1), name="unet")
+	
+	# Train to predict residual on top of linear blend baseline
 	average = layers.Conv2D(1, 1, use_bias=False, trainable=False, kernel_initializer=keras.initializers.Constant(0.5),
-	                        name="average")(inputs)
-	delta = layers.Conv2D(1, 3, padding="same", kernel_initializer="zeros", name="delta")(u1)
-	out = layers.ReLU(max_value=1.0, name="clip")(layers.Add(name="sum")([average, delta]))
+	                        name="average")(inputs)  # Linear blend baseline between the two input frames
+	delta = layers.Conv2D(1, 3, padding="same", kernel_initializer="zeros", name="delta")(u1)  # Residual from last decoding step
+	out = layers.ReLU(max_value=1.0, name="clip")(layers.Add(name="sum")([average, delta]))  # Add residual to linear blend baseline
 	return keras.Model(inputs, out, name="unet_residual")
 
 

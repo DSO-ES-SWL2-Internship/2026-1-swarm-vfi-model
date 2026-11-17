@@ -6,9 +6,8 @@ class RandomFrameDropper:
 
 	At each kept frame, a burst starts with the given probability; its length is drawn uniformly from 1..max_run.
 	The frame after a burst is always kept, so two bursts never touch and the relay always has a frame on each side of
-	a gap to interpolate between. With max_run=1 (the default) the drops are isolated frames, and the same seed gives
-	the same pattern as the first version of this class.
-
+	a gap to interpolate between. 
+	
 	Note: the drop rate is not the probability. It is the probability times the mean burst length, divided by
 	(1 + probability x mean burst length) -- e.g. probability 0.3 and max_run 3 drops about 38% of the frames.
 	"""
@@ -50,11 +49,12 @@ class RandomFrameDropper:
 			self.run_left -= 1
 			return self._drop(frame_index)
 
-		# Always keep the frame after a burst
+		# Always keep the frame after a burst (self.run_left == 0)
 		if self.previous_dropped:
 			self.previous_dropped = False
 			return False
 
+		# Random probability of being dropped
 		if self.rng.random() < self.probability:
 			length = self.rng.randint(1, self.max_run) if self.max_run > 1 else 1
 			self.run_lengths.append(length)
@@ -85,13 +85,17 @@ def gap_fill_plan(interval):
 	"""
 	plan = []
 
+	# Recursively splits the frames
 	def split(low, high):
+		# Base case: one frame apart (no gap) 
 		if high - low < 2:
 			return
-		mid = (low + high) // 2
+		
+		# Recursive case
+		mid = (low + high) // 2  # Find the midpoint rounded down
 		plan.append((mid, low, high))
-		split(low, mid)
-		split(mid, high)
+		split(low, mid)  # Split lower half
+		split(mid, high)  # Split upper half 
 
 	split(0, interval)
 	return plan

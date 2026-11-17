@@ -2,7 +2,7 @@
 
   * Full integer, input and output too: the NPU silently falls back to the CPU for float operations.
   * One weight scale per layer (per-tensor), not TF's default one per output channel: the NPU is optimised for it
-    (NXP UG10166 sec. 8.1.5). Measured 12.3 ms against 23.1 ms per inference (1.9x), for -0.03 dB PSNR.
+    (NXP UG10166 sec. 8.1.5).
   * Batch fixed at 1: a dynamic batch makes the transposed convolutions compute their output shape with a STACK op, which
     TIM-VX cannot compile (delegation fails).
   * Calibrated on 100 real frame pairs (Blender films, video range). Two sentinel pixels, 0 and 1, keep the input range at
@@ -86,10 +86,15 @@ def main():
 	ap.add_argument("--per-channel", action="store_true", help="per-channel weights (the slower NPU path, for comparison)")
 	ap.add_argument("--no-check", action="store_true")
 	args = ap.parse_args()
+
 	model = vfi.load_model(args.model)
+
+	# Write the converted model
 	args.out.parent.mkdir(parents=True, exist_ok=True)
 	args.out.write_bytes(convert(model, per_tensor=not args.per_channel))
 	print(f"saved {args.out} ({args.out.stat().st_size / 1024:.0f} KB)")
+
+	# Check model
 	if not args.no_check:
 		check(model, args.out)
 
