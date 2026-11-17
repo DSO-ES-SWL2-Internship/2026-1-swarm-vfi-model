@@ -103,7 +103,7 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument("--convert-threads", type=int, default=1,
 	                    help="threads per videoconvert (n-threads); 1 = GStreamer's default")
 	
-	# For measuring the relay on its own (streaming/scripts/test/relay_bench.py): a local file in, flat out.
+	# For measuring the relay on its own (streaming/experiments/relay_bench.py): a local file in, flat out.
 	parser.add_argument("--input", type=str,
 	                    help="read an MP4 file (path, or a name in streaming/videos) instead of the Pi's stream")
 	parser.add_argument(
@@ -123,7 +123,7 @@ def parse_args() -> argparse.Namespace:
 	                    help="simulate frame loss: chance, at each frame, that a burst of lost frames starts (0.0 to 1.0)")
 	parser.add_argument("--max-drop-run", type=int, default=1,
 	                    help="longest burst of consecutive lost frames; each burst's length is random, 1 to this. The "
-	                         "VFI fills a burst of n by n inferences, and the U-Net is only trained on 1-frame gaps, so "
+	                         "VFI fills a burst of n by n inferences, by repeated halving, exact for a gap of 2 or 4 frames, so "
 	                         "3 (a gap of 4, split exactly) is a good largest value")
 	parser.add_argument("--seed", type=int, default=42, help="random seed for reproducible frame loss")
 
@@ -255,7 +255,7 @@ class ToyUnetBlenderTFLite(Doubler):
 			self.output_lut = np.clip(np.rint((levels - out_zero_point) * (out_scale * 255)), 0, 255).astype(np.uint8)
 
 		# Invoke the model to cache the graph, prevent long stall before first frame
-		print("toy_unet_tflite: warming up the model (~15s on the NPU the first time; cached after that)...")
+		print("toy_unet_tflite: warming up the model (~30s on the NPU the first time; cached after that)...")
 		warmup_start = time.perf_counter()
 		dummy_input = np.zeros(self.input_detail["shape"], dtype=self.input_detail["dtype"])
 		self.interpreter.set_tensor(self.input_detail["index"], dummy_input)
@@ -287,6 +287,8 @@ class RandomLossRecovery:
 
 	Frames are dropped after decoding, in bursts (RandomFrameDropper). A gap in the timestamps then shows how many are
 	missing: n missing frames are n frames' worth of interpolation, by repeated halving (frame_dropper.gap_fill_plan).
+
+	Wraps a VFI technique, e.g. U-Net or linear blend as described above.
 	"""
 
 	FPS_MULTIPLIER = 1
