@@ -31,12 +31,11 @@ The Wi-Fi did not connect by itself on boot. Use the serial console:
 
 | Symptom | Cause and fix |
 | --- | --- |
-| The first frame takes about 28 s | The NPU is compiling the graph. Normal. It is cached afterwards. **Run it once before you present** |
-| The model takes 5+ seconds | A float operation made it fall back to the CPU. Check the export: fully INT8, input and output too |
+| The first frame takes a long time | The NPU is compiling the graph. Normal. It is cached afterwards. **Run it once before you present** |
+| The model is far slower than expected | A float operation made it fall back to the CPU. Check the export: fully INT8, input and output too |
 | `Setup node STACK fail` | The model has a dynamic batch size. Re-export with the batch fixed at 1 |
 | "input scale is not 1/255; re-export" | The relay refuses a model whose input range is not exactly 0–1. Export with `export_tflite.py`, which adds the sentinel pixels |
-| It runs, but at CPU speed (about 490 ms) | The delegate was not loaded. Is `/usr/lib/libvx_delegate.so` there? The relay says "running on the NPU" or "running on CPU" when it starts |
-| The GPU is thousands of times slower | Normal for this model. The GPU is bad at transposed convolutions. See [the model](ml-model.md) |
+| It runs, but at CPU speed | The delegate was not loaded. Is `/usr/lib/libvx_delegate.so` there? The relay says "running on the NPU" or "running on CPU" when it starts |
 
 ## The load monitor shows zeros
 
@@ -53,9 +52,7 @@ read them as "is it working", not as a percentage.
 
 - **Check the board with `benchmark_model` first** after any change to the model or the image. It takes a minute and
   tells you whether the NPU works.
-- **Change one thing at a time**, both when training (we ran a controlled 2×2 before believing any gain) and when
-  measuring.
-- **Measure before you believe.** Several of our assumptions were wrong until we timed them. The GPU is not a faster
-  NPU, and a faster step does not help if it was not the slowest.
+- **Change one thing at a time**, both when training and when measuring.
+- **Measure before you believe.** Time a change before you assume it helps.
 - **Write down the settings with every number.** Frames per second means little without the resolution, the delegate
   and the number of threads.

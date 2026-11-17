@@ -18,7 +18,7 @@ Both languages do the same four things:
 | Step | What happens |
 | --- | --- |
 | **Set up** | Load the model, and attach NXP's VX delegate (`/usr/lib/libvx_delegate.so`), which sends the work to the NPU |
-| **Warm up** | Run one inference. The NPU compiles the model's graph on the first run, which takes about 28 s for our model. It is cached afterwards |
+| **Warm up** | Run one inference. The NPU compiles the model's graph on the first run, which is slow. It is cached afterwards |
 | **Run** | Copy the input in, invoke, read the output |
 | **Check** | Compare the time against your budget |
 
@@ -76,7 +76,7 @@ The VX delegate is not linked into your program. It is loaded **by path at run t
 
 !!! warning "If the NPU is not used, nothing tells you"
     A float operation, or a layer the NPU cannot compile, makes the delegate quietly fall back to the CPU. Your program
-    still works, just far slower (about 40× for our model on one CPU core). Always check the delegate's log line, or time the inference. See the
+    still works, just far slower. Always check the delegate's log line, or time the inference. See the
     [rules for the NPU](ml-model.md#export-it-for-the-npu).
 
 ## Measuring a model: benchmark_model

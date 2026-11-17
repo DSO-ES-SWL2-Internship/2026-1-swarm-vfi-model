@@ -37,7 +37,7 @@ normal GStreamer chain passes one frame in, one frame out. With `appsink` (frame
 
 The model takes **video-range grey** (16–235). That is exactly the Y plane of the decoder's YUV output. If the scaler
 kept YUV, the converter after it only has to take the Y plane, with no colour maths and no range fix. That is what
-`imxvideoconvert_ocl` does (NV12 in, NV12 out), at the lowest CPU cost of the options we measured.
+`imxvideoconvert_ocl` does (NV12 in, NV12 out).
 
 ### When is cropping needed?
 
@@ -73,10 +73,6 @@ Between the two arms, the model sees uint8 pixels and turns them into INT8 input
 two frames as two channels, runs the NPU, and turns the INT8 output back into pixels through a 256-entry lookup table.
 [The model](ml-model.md#export-it-for-the-npu) explains why that is exact.
 
-!!! tip "Try it"
-    The [frame loss visualisation](visualisations/frame-loss.md) lets you set the drop probability and the longest
-    burst, and shows which frames are made from which.
-
 ## Arm B: encode and send
 
 | Element | What it does | Why |
@@ -106,8 +102,7 @@ with queues:      [decode]  [decode]  [decode]
                                 [model]  [model]
 ```
 
-This is the idea behind the offloading numbers: a faster step helps only if it was the slowest one. See the
-[pipeline budget visualisation](visualisations/pipeline-budget.md) to try it.
+This is the idea behind the offloading: a faster step helps only if it was the slowest one.
 
 `appsrc` already hands frames to arm B on its own thread, so the model and the encoder run on different threads even
 with `--no-queues`. The relay's stats line reports this as `shared_thread: false`.

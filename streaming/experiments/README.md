@@ -6,10 +6,10 @@ Results go to `../videos/benchmark/` and `../../outputs/`.
 
 | Script | What it measured |
 | --- | --- |
-| `relay_bench.py` | The real relay with the model, one offload at a time (all CPU, + VPU decode, + GPU scale, + NPU, + VPU encode), each without and with queues -> `outputs/relay_bench/` (slides: the pipeline offloading chart, 176 -> 17.6 ms per frame) |
+| `relay_bench.py` | The real relay with the model, one offload at a time (all CPU, + VPU decode, + GPU scale, + NPU, + VPU encode), each without and with queues -> `outputs/relay_bench/` |
 | `pipeline_bench.py` | decode -> scale -> encode on CPU / VPU / G2D, without and with queues, with per-step predictions (why queues help) |
 | `codec_suite.py` | Every decoder / scaler / encoder combination at 480p, 720p and 1080p: speed, CPU time, utilisation; `plot_codec_suite.py` and `plot_utilisation.py` plot it on the VM (needs matplotlib) |
-| `trace_buffers.py`, `scaler_tlb.py` | Frame memory per hand-over between units; why the CPU scaler is slower on VPU frames |
+| `trace_buffers.py`, `scaler_tlb.py` | Frame memory per hand-over between units, and the CPU scaler on VPU frames |
 | `test_g2d_colour.sh` | Which colorimetry setting gives the right grey on the G2D path (the G2D is no longer in the relay) |
 | `compare_videos.sh` | Plays an original and a received video side by side |
 

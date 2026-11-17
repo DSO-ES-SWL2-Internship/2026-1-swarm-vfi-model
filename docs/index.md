@@ -1,47 +1,40 @@
-# VFI on the i.MX 8M Plus
+# i.MX 8M Plus Hardware Utilisation using VFI
 
-A video stream loses frames on the way. What if a small neural network could guess each missing frame from the frames
-on either side of it? That is **video frame interpolation (VFI)**.
+!!! question "Problem Statement"
+    The i.MX 8M Plus has a CPU, a GPU, a video unit (VPU) and a neural network accelerator (NPU). 
+    * How can the i.MX8M Plus's hardware resources be best used to improve payload availability?
+    * How can software for the chosen application be developed?
+    * How can the application be optimised for the hardware? 
 
-This project is not really about the network, though. It is a way to answer a different question:
+ In order to demonstrate the utilisation of the hardware, the project builds a video streaming application (over multiple hops in a wireless network) utilising Video Frame Interpolation (VFI).
 
-!!! question "The question behind the project"
-    The i.MX 8M Plus has a CPU, a GPU, a video unit (VPU) and a neural network accelerator (NPU). **Which one should do
-    which job**, and how much does it matter? We picked a real task that uses all of them, and measured.
+### The Setup
+* Video Frame Interpolation (VFI) is a concept whereby additional intermediate frames are generated and inserted into the video playback.
+* In the demo application, random frames are dropped, and VFI is used to insert replacements for these dropped frames.
+* The VFI concept is realised using a machine learning application.
+* This machine learning application is part of a bigger video streaming pipeline living on the i.MX8M Plus.
+* The overall 3 device setup involves sending video data from the Raspberry Pi 4B to the i.MX8M Plus, where it is processed using VFI. Subsequently, the processed video stream will be sent to the VM where processed video and the video with dropped frames will be played side-by-side for the visual comparison.
 
-## The demo in one picture
+### Project Focus
+* The project focuses on the implementation of the application for utilisation on the hardware (as opposed to optimising the accuracy of VFI prediction).
+* As such the documentation would largely focus on practical implementation details.
 
-Three devices. The Pi sends a video, the i.MX8 board (the "relay") deliberately drops bursts of frames and recovers
+## The Demo
+
+Three devices. 
+* The Pi sends a video stream to the i.MX8.
+* The i.MX8 board (the "relay") deliberately drops bursts of frames and recovers them using Video Frame Interpolation.
 them with the model, and your computer shows the result next to the same video with the frames just held.
 
 <div class="diagram" markdown="0">
 --8<-- "assets/diagrams/demo-setup.svg"
 </div>
 
-Every step on the board is a hardware unit's job. The same relay can also run **entirely on the CPU**, which is how we
-measured what the hardware buys us.
-
-## What we found
-
-All numbers were measured on the board on 16 November 2026, with the final model.
-
-| Question | Answer |
-| --- | --- |
-| How long does the model take on the NPU? | **12.1 ms** per frame at 448×256. A 24 fps video leaves 41.7 ms per frame, so it fits with room to spare |
-| ...on the CPU? | 490 ms on one core, 119 ms on all four. Too slow to keep up |
-| ...on the GPU? | 9.5 seconds. About 20× *slower* than the CPU. The transposed convolution layers are the culprit |
-| Does the way the model is quantised matter? | Yes: per-tensor INT8 is **1.9× faster** on the NPU than per-channel (12.1 vs 23.1 ms), for the same quality (within 0.02 dB) |
-| What does the hardware buy for the whole relay? | On the 52-second trailer, flat out: **11 s** with the accelerators against **65 s** all on the CPU, using 1.2 cores instead of 3.8 |
-| Does the model recover frames well? | On held-out Sintel clips: 36.3 dB PSNR against 35.6 dB for a plain blend of the two frames. On the perceptual score (LPIPS, lower is better) the plain blend is still slightly better, 0.063 against 0.072 |
-
-!!! note "An honest reading of the last row"
-    The model beats a simple blend on pixel accuracy but not on the perceptual score. It is a small model (70 thousand
-    parameters) trained for 20 minutes on a CPU, built to fit the NPU, not to win benchmarks. Its job here is to be a
-    realistic workload for the hardware.
+Every step on the board is a hardware unit's job. The same relay can also run **entirely on the CPU**, to compare the two.
 
 ## Where to go next
 
-| I want to... | Read |
+| Process | Helpful Link |
 | --- | --- |
 | Get the three devices ready | [Set up the three devices](setup.md) |
 | See the demo working | [Run the demos](run-the-demos.md) |
@@ -49,13 +42,7 @@ All numbers were measured on the board on 16 November 2026, with the final model
 | Understand what the relay does with GStreamer | [The GStreamer pipeline](gstreamer-pipeline.md) |
 | Write and run my own Python or C++ on the board | [Developing on the board](develop-on-board.md) |
 | Build or change the Linux image on the board | [The Yocto image](yocto.md) |
-| Play with the ideas in the browser | [Visualisations](visualisations/index.md) |
 | Fix something that does not work | [Tips and troubleshooting](tips.md) |
-
-## What you need to know already
-
-We assume you are comfortable with Linux, the shell, `ssh`/`scp` and git. Anything specific to this project
-(Yocto, TensorFlow Lite, GStreamer, the NPU) is explained where it first appears.
 
 ## Credits
 

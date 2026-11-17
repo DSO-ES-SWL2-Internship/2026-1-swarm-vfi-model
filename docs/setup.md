@@ -99,8 +99,8 @@ image are healthy:
     --graph=vfi_unet.tflite --external_delegate_path=/usr/lib/libvx_delegate.so
 ```
 
-Look for `Inference (avg)` of about 12 ms. The **first** inference takes about 28 seconds, because the NPU compiles the
-model's graph. Later runs are fast.
+Look for an `Inference (avg)` line and no errors. The **first** inference is much slower than the rest, because the NPU
+compiles the model's graph. Later runs are fast.
 
 ### 3d. Copy the relay and the model
 
@@ -114,7 +114,7 @@ scp artifacts/vfi_unet.tflite root@172.20.10.10:vfi/artifacts/
 ```
 
 The relay finds the model at `../../artifacts/vfi_unet.tflite` relative to the script, which is why the folder layout
-matters. It also keeps the compiled NPU graph in `artifacts/vx_cache/`, so the 28 seconds is paid only once.
+matters. It also keeps the compiled NPU graph in `artifacts/vx_cache/`, so the compile is paid only once.
 
 !!! warning "Run from one copy only"
     If the board has an older clone of the repository, make sure you start the relay from `~/vfi`, not from the old
@@ -135,7 +135,7 @@ mount -t debugfs none /sys/kernel/debug     # "already mounted" is fine
 | --- | --- | --- |
 | VM reaches the board | `ssh root@172.20.10.10` | a shell |
 | VM reaches the Pi | `ssh pi@172.20.10.2` | a shell |
-| NPU runs the model | the `benchmark_model` command above | about 12 ms |
-| Relay works on its own | on the board: `cd ~/vfi/streaming/scripts && python3 relay.py toy_unet_tflite --input <trailer.mp4> --output fake` | 1251 frames in and out |
+| NPU runs the model | the `benchmark_model` command above | an `Inference (avg)` line, no errors |
+| Relay works on its own | on the board: `cd ~/vfi/streaming/scripts && python3 relay.py toy_unet_tflite --input <trailer.mp4> --output fake` | the same number of frames in and out |
 
 Then go to [Run the demos](run-the-demos.md).

@@ -42,42 +42,16 @@ windows take frames `t, t+g, t+2g` for gaps `g = 1, 2`, with flips and time reve
 demo fills a gap of four frames by halving, so the model needs to be good at midpoints two frames apart too.
 
 **Why mix in Blender?** Vimeo-90K has very little motion, so a model trained only on it learns to blend. The films
-add motion. See the table below for what it bought.
+add motion.
 
 **Recipe.** Charbonnier loss (a smooth L1), Adam at 1e-3 with a cosine decay, 12 epochs of 250 steps of batch 8,
 seed 0.
 
-### What we tried
+### Experiments
 
-Each change was tested alone, and scored on 120 held-out clips from the *Sintel* trailer (frames 1 apart). The
-earlier model and the linear blend are there for reference.
-
-| Run | What it is | PSNR | LPIPS |
-| --- | --- | --- | --- |
-| Earlier model | Plain output, trained on Vimeo only, different recipe | 30.88 dB | 0.149 |
-| a0 | Plain sigmoid output, Vimeo only (the control) | 33.24 dB | 0.100 |
-| a1 | a0 + Blender films | 33.57 dB | 0.076 |
-| a2 | Blend + correction, Vimeo only | 36.62 dB | 0.081 |
-| **a3** | **Blend + correction + Blender films (deployed)** | 36.31 dB | **0.072** |
-| a4 | a3 with 1.5× the channels | 36.37 dB | 0.074 |
-| a5 | a3 + a sharpness (gradient) loss | 36.62 dB | 0.078 |
-| a6 | a3 with 2× the channels | collapsed to the plain blend | |
-| (baseline) | Linear blend of the two frames | 35.59 dB | 0.063 |
-
-What the table says:
-
-- **The blend-plus-correction output is the big win**, about +3 dB (a0 → a2, a1 → a3).
-- **The Blender films mainly help the perceptual score**: LPIPS drops from 0.081 to 0.072 (a2 → a3), for 0.3 dB of
-  PSNR. That is why a3 is deployed and not a2.
-- **A wider network and a sharpness loss did not help.** The sharpness loss raises PSNR back to 36.62 dB but makes
-  LPIPS worse.
-- **a6 is a failed run, not evidence.** It collapsed to the plain blend (its scores are identical to it), so the
-  width conclusion rests on a4.
-- **Check the noise before believing a gain.** Rerunning with another seed moved the plain model by 0.8 dB, and a3 by
-  only 0.05 dB. A change smaller than that is not a result.
-- **No version of the model beats the plain blend on LPIPS.** The model wins on PSNR (0.7 dB) and loses on LPIPS.
-
-The runs are in `model/experiments/run_experiments.sh`, and the scores in `artifacts/experiments/`.
+The choices behind the recipe (the output type, the data, the width, the loss, the seeds) were each tested one change at
+a time. The runs are listed in `model/experiments/run_experiments.sh`, and their scores are written to
+`artifacts/experiments/`.
 
 ## Evaluate it
 
@@ -104,11 +78,11 @@ The NPU is picky. The export script enforces each of these rules, and each one h
 
 !!! abstract "The four rules"
     **1. Fully INT8, input and output too.** The NPU only does fixed-point arithmetic. Any float operation silently
-    falls back to the CPU. We measured the float model on the "NPU": **5.6 seconds** per frame.
+    falls back to the CPU, so a model with float operations loses what the NPU offers.
 
     **2. Per-tensor weights, not per-channel.** TensorFlow quantises each output channel with its own scale by
-    default. NXP says the NPU is optimised for one scale per layer. Measured: **12.1 ms against 23.1 ms**, 1.9×
-    faster, for about 0.02 dB difference in quality.
+    default. NXP says the NPU is optimised for one scale per layer (see its Machine Learning User's Guide, UG10166),
+    so the export uses one scale per tensor.
 
     **3. Batch size fixed at 1.** A dynamic batch makes the transposed convolutions compute their output shape with a
     `STACK` operation. TIM-VX, the NPU's compiler, cannot compile it, and the delegate fails. You will see
@@ -119,31 +93,14 @@ The NPU is picky. The export script enforces each of these rules, and each one h
     no float conversion. The relay checks this at start-up and refuses a model that breaks it.
 
 The output scale is set by calibration and is not exactly 1/256, so the relay turns the model's INT8 output into pixels
-with a 256-entry lookup table. That is cheaper than a float rescale on the board's A53 cores.
+with a 256-entry lookup table.
 
-### How much does INT8 cost in quality?
+## Checking the speed
 
-Measured on the Sintel clips (frames 1 apart), PSNR / SSIM:
-
-| Model | PSNR | SSIM | NPU time |
-| --- | --- | --- | --- |
-| 32-bit float | 36.31 dB | 0.9334 | not meaningful (5.6 s) |
-| INT8 per-channel | 36.03 dB | 0.9306 | 23.1 ms |
-| INT8 per-tensor (deployed) | 36.05 dB | 0.9307 | **12.1 ms** |
-
-Going to INT8 costs about 0.25 dB. Per-tensor against per-channel makes no real difference.
-
-## Speed on the board
-
-| Frame size | NPU time | First run (graph compile) |
-| --- | --- | --- |
-| 448×256 | 12.1 ms | 28 s |
-| 640×360 | 25.0 ms | 52 s |
-| 848×480 | 43.6 ms | 77 s |
-| 1280×720 | 101.3 ms | 140 s |
-
-The time grows with the number of pixels, at about 110 ms per megapixel. The budget for 24 fps is **41.7 ms**, so 480p
-is just over. See how this plays out in the [pipeline budget visualisation](visualisations/pipeline-budget.md).
+A 24 fps video leaves 41.7 ms per frame, so the model has to run in well under that to fit in a pipeline. Time it on the
+board with `benchmark_model`: see [Developing on the board](develop-on-board.md#measuring-a-model-benchmark_model).
+Re-time it after any change to the model or its export, and note the frame size, because the time depends on the
+number of pixels. The first run after a change is much slower than the rest, because the NPU compiles the graph.
 
 ## Where things are
 

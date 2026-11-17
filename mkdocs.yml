@@ -55,15 +55,11 @@ extra_css:
 nav:
   - Home: index.md
   - Get started:
-      - Set up the three devices: setup.md
-      - Run the demos: run-the-demos.md
-  - Build and understand:
-      - The model: ml-model.md
-      - The GStreamer pipeline: gstreamer-pipeline.md
-      - Developing on the board: develop-on-board.md
+      - Demo Setup: setup.md
+      - Running Demo: run-the-demos.md
+  - Key Components:
+      - Machine Learning: ml-model.md
       - The Yocto image: yocto.md
-  - Visualisations:
-      - Index: visualisations/index.md
-      - Frame loss and gap filling: visualisations/frame-loss.md
-      - Pipeline budget: visualisations/pipeline-budget.md
-  - Tips and troubleshooting: tips.md
+      - Application Development: develop-on-board.md
+      - The GStreamer pipeline: gstreamer-pipeline.md
+  - Tips: tips.md

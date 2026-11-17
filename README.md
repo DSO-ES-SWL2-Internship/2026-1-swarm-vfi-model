@@ -18,7 +18,7 @@
 ## Documentation
 
 The full guide (setting up the Pi, the board and the VM, running the demos, the model, the GStreamer pipeline, the
-Yocto image, and some interactive explainers) is at
+and the Yocto image) is at
 **https://dso-es-swl2-internship.github.io/2026-1-swarm-vfi-model/**.
 
 Its source is in `docs/`; preview it on your

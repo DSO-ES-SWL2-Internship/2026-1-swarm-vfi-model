@@ -14,7 +14,7 @@ units work.
 
 !!! info "Before you start"
     Everything in [Set up the three devices](setup.md) is done, and you have run the relay once so the NPU graph is
-    compiled. The first run after a model change is slow (about 30 s).
+    compiled. The first run after a model change is slow, because the NPU compiles the model.
 
 ## Demo 1: the full pipeline
 
@@ -55,10 +55,10 @@ Start the three parts **in this order**. The relay waits for the viewer before i
 - The trailer lasts about 52 seconds. Then the sender and the relay exit and the relay prints its summary:
 
 ```text
-Dropped frames: 465 in 239 bursts      (37% of 1251 frames)
-Burst lengths: 1x82, 2x88, 3x69
-Recovered frames: 465
-Mean inference latency (465 calls): about 13 ms/frame
+Dropped frames: <n> in <n> bursts
+Burst lengths: 1x<n>, 2x<n>, 3x<n>
+Recovered frames: <n>        (the same as the dropped frames)
+Mean inference latency (<n> calls): <ms>/frame
 ```
 
 To run it again, restart the sender and the relay (they exit when the video ends), then press **Connect**.
@@ -71,7 +71,7 @@ To run it again, restart the sender and the relay (they exit when the video ends
     The relay and the baseline video use the same drop settings: probability 0.3, bursts of up to 3 frames, seed 42.
     Same seed, same frames dropped. The baseline file `streaming/videos/stuttering_burst.mp4` was made with
     `make_burst_demo.sh -d` using those values. If you change the relay's settings, make a new baseline with the same
-    ones. See the [frame loss visualisation](visualisations/frame-loss.md) to explore what these settings do.
+    ones.
 
 ## Demo 2: all on the CPU
 
@@ -97,7 +97,7 @@ Then start the sender on the Pi and press **Connect** in the viewer, as in Demo 
 
 - The video **lags**. The relay cannot keep up, so recovery falls behind.
 - All four CPU cores sit near 100%. The NPU, GPU and VPU rows stay near 0.
-- It takes about **65 s** for the 52 s trailer. The final summary shows about **133 ms** per model call.
+- It takes longer than the 52 s the trailer lasts. The final summary shows the model time per call.
 
 Everything runs on the CPU in this mode: software decode, software scale, the model on four threads, and a software
 encoder (MPEG-4).
@@ -112,10 +112,10 @@ Same as Demo 2, but start the relay with:
 
 **What you should see**
 
-- The video stays smooth and keeps up with real time (about 52 s).
-- About **1.2 cores** busy, not 3.8.
+- The video stays smooth and keeps up with real time.
+- Fewer CPU cores are busy than in Demo 2.
 - The monitor shows the VPU (decode and encode) and the NPU working.
-- About **13 ms** per model call in the summary.
+- The summary shows a lower model time per call than in Demo 2.
 
 ## Reading the load monitor
 
