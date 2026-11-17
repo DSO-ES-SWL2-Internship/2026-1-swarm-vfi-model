@@ -1,0 +1,4 @@
+# Python packages to build the documentation site (docs/ + mkdocs.yml). Preview it on your machine with:
+#   pip install -r requirements-docs.txt
+#   mkdocs serve
+mkdocs-material==9.7.7   # brings mkdocs and pymdown-extensions

@@ -1,0 +1,72 @@
+<svg class="d-svg" viewBox="0 0 1100 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The relay's two GStreamer pipelines, joined by Python">
+  <title>The relay's two GStreamer pipelines, joined by Python</title>
+  <defs><marker id="ah-relay-pipeline" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="d-head" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+  <rect class="d-group" x="5" y="5" width="1090" height="125" rx="10"/>
+  <text class="d-label" x="1083" y="23" style="text-anchor:end">Arm A: receive and prepare</text>
+  <rect class="d-box " x="18" y="50" width="104" height="56" rx="7"/>
+  <text class="d-text " x="70.0" y="74.5">tcpclientsrc</text>
+  <text class="d-text d-sub" x="70.0" y="89.5">or filesrc</text>
+  <rect class="d-box " x="137" y="50" width="104" height="56" rx="7"/>
+  <text class="d-text " x="189.0" y="74.5">tsdemux</text>
+  <text class="d-text d-sub" x="189.0" y="89.5">or qtdemux</text>
+  <path class="d-line" d="M122,78 L137,78" marker-end="url(#ah-relay-pipeline)"/>
+  <rect class="d-box " x="256" y="50" width="104" height="56" rx="7"/>
+  <text class="d-text " x="308.0" y="82.0">h264parse</text>
+  <path class="d-line" d="M241,78 L256,78" marker-end="url(#ah-relay-pipeline)"/>
+  <rect class="d-box hw" x="375" y="50" width="104" height="56" rx="7"/>
+  <text class="d-text " x="427.0" y="74.5">decoder</text>
+  <text class="d-text d-sub" x="427.0" y="89.5">vpudec: VPU</text>
+  <path class="d-line" d="M360,78 L375,78" marker-end="url(#ah-relay-pipeline)"/>
+  <rect class="d-box queue" x="494" y="50" width="104" height="56" rx="7"/>
+  <text class="d-text " x="546.0" y="74.5">queue</text>
+  <text class="d-text d-sub" x="546.0" y="89.5">thread</text>
+  <path class="d-line" d="M479,78 L494,78" marker-end="url(#ah-relay-pipeline)"/>
+  <rect class="d-box hw" x="613" y="50" width="104" height="56" rx="7"/>
+  <text class="d-text " x="665.0" y="74.5">scaler</text>
+  <text class="d-text d-sub" x="665.0" y="89.5">OCL: GPU</text>
+  <path class="d-line" d="M598,78 L613,78" marker-end="url(#ah-relay-pipeline)"/>
+  <rect class="d-box " x="732" y="50" width="104" height="56" rx="7"/>
+  <text class="d-text " x="784.0" y="74.5">videoconvert</text>
+  <text class="d-text d-sub" x="784.0" y="89.5">to GRAY8</text>
+  <path class="d-line" d="M717,78 L732,78" marker-end="url(#ah-relay-pipeline)"/>
+  <rect class="d-box queue" x="851" y="50" width="104" height="56" rx="7"/>
+  <text class="d-text " x="903.0" y="74.5">queue</text>
+  <text class="d-text d-sub" x="903.0" y="89.5">thread</text>
+  <path class="d-line" d="M836,78 L851,78" marker-end="url(#ah-relay-pipeline)"/>
+  <rect class="d-box " x="970" y="50" width="104" height="56" rx="7"/>
+  <text class="d-text " x="1022.0" y="74.5">appsink</text>
+  <text class="d-text d-sub" x="1022.0" y="89.5">to Python</text>
+  <path class="d-line" d="M955,78 L970,78" marker-end="url(#ah-relay-pipeline)"/>
+  <rect class="d-box py" x="380" y="165" width="340" height="80" rx="7"/>
+  <text class="d-text " x="550.0" y="194.0">Python (relay.py)</text>
+  <text class="d-text d-sub" x="550.0" y="209.0">drop frames, find gaps in the timestamps</text>
+  <text class="d-text d-sub" x="550.0" y="224.0">run the model on the NPU, push frames in order</text>
+  <path class="d-line" d="M1019,106 L1019,140 L550,140 L550,165" marker-end="url(#ah-relay-pipeline)"/>
+  <text class="d-text d-sub" x="800" y="134">frames</text>
+  <rect class="d-group" x="5" y="270" width="1090" height="125" rx="10"/>
+  <text class="d-label" x="1083" y="288" style="text-anchor:end">Arm B: encode and send</text>
+  <rect class="d-box " x="18" y="315" width="152" height="56" rx="7"/>
+  <text class="d-text " x="94.0" y="339.5">appsrc</text>
+  <text class="d-text d-sub" x="94.0" y="354.5">from Python</text>
+  <rect class="d-box queue" x="196" y="315" width="152" height="56" rx="7"/>
+  <text class="d-text " x="272.0" y="339.5">queue</text>
+  <text class="d-text d-sub" x="272.0" y="354.5">thread</text>
+  <path class="d-line" d="M170,343 L196,343" marker-end="url(#ah-relay-pipeline)"/>
+  <rect class="d-box " x="374" y="315" width="152" height="56" rx="7"/>
+  <text class="d-text " x="450.0" y="339.5">videoconvert</text>
+  <text class="d-text d-sub" x="450.0" y="354.5">to I420</text>
+  <path class="d-line" d="M348,343 L374,343" marker-end="url(#ah-relay-pipeline)"/>
+  <rect class="d-box hw" x="552" y="315" width="152" height="56" rx="7"/>
+  <text class="d-text " x="628.0" y="339.5">encoder</text>
+  <text class="d-text d-sub" x="628.0" y="354.5">vpuenc_h264: VPU</text>
+  <path class="d-line" d="M526,343 L552,343" marker-end="url(#ah-relay-pipeline)"/>
+  <rect class="d-box " x="730" y="315" width="152" height="56" rx="7"/>
+  <text class="d-text " x="806.0" y="347.0">mpegtsmux</text>
+  <path class="d-line" d="M704,343 L730,343" marker-end="url(#ah-relay-pipeline)"/>
+  <rect class="d-box " x="908" y="315" width="152" height="56" rx="7"/>
+  <text class="d-text " x="984.0" y="339.5">tcpserversink</text>
+  <text class="d-text d-sub" x="984.0" y="354.5">to the VM</text>
+  <path class="d-line" d="M882,343 L908,343" marker-end="url(#ah-relay-pipeline)"/>
+  <path class="d-line" d="M550,245 L550,262 L94,262 L94,315" marker-end="url(#ah-relay-pipeline)"/>
+  <text class="d-text d-sub" x="330" y="257">frames</text>
+</svg>

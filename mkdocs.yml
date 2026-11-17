@@ -1,0 +1,69 @@
+site_name: VFI on the i.MX 8M Plus
+site_description: Recovering lost video frames with a small neural network, and finding which part of the i.MX 8M Plus is best for which job.
+site_url: https://dso-es-swl2-internship.github.io/2026-1-swarm-vfi-model/
+repo_url: https://github.com/DSO-ES-SWL2-Internship/2026-1-swarm-vfi-model
+repo_name: 2026-1-swarm-vfi-model
+edit_uri: edit/master/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: deep orange
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - search.highlight
+    - toc.follow
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: false
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      base_path: [docs]
+      check_paths: true
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Set up the three devices: setup.md
+      - Run the demos: run-the-demos.md
+  - Build and understand:
+      - The model: ml-model.md
+      - The GStreamer pipeline: gstreamer-pipeline.md
+      - Developing on the board: develop-on-board.md
+      - The Yocto image: yocto.md
+  - Visualisations:
+      - Index: visualisations/index.md
+      - Frame loss and gap filling: visualisations/frame-loss.md
+      - Pipeline budget: visualisations/pipeline-budget.md
+  - Tips and troubleshooting: tips.md

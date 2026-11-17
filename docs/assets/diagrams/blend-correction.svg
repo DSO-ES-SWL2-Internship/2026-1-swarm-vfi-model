@@ -1,0 +1,29 @@
+<svg class="d-svg" viewBox="0 0 1000 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The model output is the average of the two frames plus a learned correction">
+  <title>The model output is the average of the two frames plus a learned correction</title>
+  <defs><marker id="ah-blend-correction" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="d-head" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+  <rect class="d-box " x="10" y="88" width="180" height="64" rx="7"/>
+  <text class="d-text " x="100.0" y="109.0">frame before (A)</text>
+  <text class="d-text " x="100.0" y="124.0">frame after (B)</text>
+  <text class="d-text d-sub" x="100.0" y="139.0">as 2 channels</text>
+  <rect class="d-box " x="270" y="28" width="260" height="66" rx="7"/>
+  <text class="d-text " x="400.0" y="57.5">average</text>
+  <text class="d-text d-sub" x="400.0" y="72.5">1×1 convolution, weights fixed at 0.5</text>
+  <rect class="d-box hw" x="270" y="146" width="260" height="76" rx="7"/>
+  <text class="d-text " x="400.0" y="173.0">U-Net, then correction (delta)</text>
+  <text class="d-text d-sub" x="400.0" y="188.0">3×3 convolution, starts at zero</text>
+  <text class="d-text d-sub" x="400.0" y="203.0">16 / 32 / 64 channels</text>
+  <path class="d-line" d="M190,120 L230,120 L230,61 L270,61" marker-end="url(#ah-blend-correction)"/>
+  <path class="d-line" d="M190,120 L230,120 L230,184 L270,184" marker-end="url(#ah-blend-correction)"/>
+  <circle class="d-box" cx="620" cy="124" r="18"/>
+  <text class="d-text" x="620" y="129" style="font-size:16px">+</text>
+  <path class="d-line" d="M530,61 L620,61 L620,106" marker-end="url(#ah-blend-correction)"/>
+  <path class="d-line" d="M530,184 L620,184 L620,142" marker-end="url(#ah-blend-correction)"/>
+  <rect class="d-box " x="700" y="98" width="120" height="52" rx="7"/>
+  <text class="d-text " x="760.0" y="128.0">clip to 0–1</text>
+  <path class="d-line" d="M638,124 L700,124" marker-end="url(#ah-blend-correction)"/>
+  <rect class="d-box " x="860" y="98" width="130" height="52" rx="7"/>
+  <text class="d-text " x="925.0" y="120.5">predicted</text>
+  <text class="d-text " x="925.0" y="135.5">middle frame</text>
+  <path class="d-line" d="M820,124 L860,124" marker-end="url(#ah-blend-correction)"/>
+  <text class="d-text d-sub" x="500" y="244">output = clip( (A + B) / 2 + delta, 0, 1 )  —  delta starts at zero, so training starts from a plain blend</text>
+</svg>

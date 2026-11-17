@@ -1,0 +1,14 @@
+/* Diagrams (docs/assets/diagrams/*.svg, included inline) follow the site's light/dark theme. */
+.diagram { overflow-x: auto; margin: 1.2em 0; }
+.diagram .d-svg { width: 100%; height: auto; min-width: 560px; max-width: 1100px; display: block; }
+
+.d-box { fill: var(--md-code-bg-color); stroke: var(--md-default-fg-color--lighter); stroke-width: 1.5; }
+.d-box.hw { stroke: var(--md-accent-fg-color); stroke-width: 2; }
+.d-box.py { stroke: var(--md-primary-fg-color); stroke-width: 2; }
+.d-box.queue { stroke-dasharray: 5 3; }
+.d-group { fill: none; stroke: var(--md-default-fg-color--lighter); stroke-dasharray: 3 4; stroke-width: 1.2; }
+.d-line { fill: none; stroke: var(--md-default-fg-color--light); stroke-width: 1.6; }
+.d-head { fill: var(--md-default-fg-color--light); }
+.d-text { fill: var(--md-default-fg-color); font-family: var(--md-text-font-family, sans-serif); font-size: 14px; text-anchor: middle; }
+.d-text.d-sub { fill: var(--md-default-fg-color--light); font-size: 12px; }
+.d-label { fill: var(--md-default-fg-color--light); font-family: var(--md-text-font-family, sans-serif); font-size: 13px; font-weight: 600; }

@@ -11,5 +11,17 @@
 !artifacts/vfi_unet.tflite
 !splits/*.txt
 
+# The documentation site (MkDocs Material): config, pages, the interactive pages, the deploy workflow
+!mkdocs.yml
+!requirements*.txt
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
+!docs/**/*.html
+!docs/**/*.css
+!docs/**/*.svg
+!docs/**/*.png
+site/
+
 # CMake build output (Makefiles, cache, binaries)
 build/

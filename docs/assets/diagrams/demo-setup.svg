@@ -1,0 +1,35 @@
+<svg class="d-svg" viewBox="0 0 1060 225" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The Pi streams video to the i.MX8 relay, which recovers lost frames and streams to the VM">
+  <title>The Pi streams video to the i.MX8 relay, which recovers lost frames and streams to the VM</title>
+  <defs><marker id="ah-demo-setup" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="d-head" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+  <rect class="d-box " x="10" y="70" width="120" height="70" rx="7"/>
+  <text class="d-text " x="70.0" y="94.0">Raspberry Pi</text>
+  <text class="d-text d-sub" x="70.0" y="109.0">sender.py</text>
+  <text class="d-text d-sub" x="70.0" y="124.0">streams the trailer</text>
+  <rect class="d-group" x="212" y="20" width="596" height="165" rx="10"/>
+  <text class="d-label" x="796" y="38" style="text-anchor:end">i.MX 8M Plus board: relay.py</text>
+  <rect class="d-box hw" x="227" y="75" width="128" height="70" rx="7"/>
+  <text class="d-text " x="291.0" y="106.5">Decode</text>
+  <text class="d-text d-sub" x="291.0" y="121.5">VPU</text>
+  <rect class="d-box hw" x="373" y="75" width="128" height="70" rx="7"/>
+  <text class="d-text " x="437.0" y="106.5">Scale to 448×256</text>
+  <text class="d-text d-sub" x="437.0" y="121.5">GPU</text>
+  <path class="d-line" d="M355,110 L373,110" marker-end="url(#ah-demo-setup)"/>
+  <rect class="d-box hw" x="519" y="75" width="128" height="70" rx="7"/>
+  <text class="d-text " x="583.0" y="106.5">Recover frames</text>
+  <text class="d-text d-sub" x="583.0" y="121.5">NPU</text>
+  <path class="d-line" d="M501,110 L519,110" marker-end="url(#ah-demo-setup)"/>
+  <rect class="d-box hw" x="665" y="75" width="128" height="70" rx="7"/>
+  <text class="d-text " x="729.0" y="106.5">Encode</text>
+  <text class="d-text d-sub" x="729.0" y="121.5">VPU</text>
+  <path class="d-line" d="M647,110 L665,110" marker-end="url(#ah-demo-setup)"/>
+  <rect class="d-box " x="900" y="70" width="150" height="80" rx="7"/>
+  <text class="d-text " x="975.0" y="91.5">Your computer</text>
+  <text class="d-text d-sub" x="975.0" y="106.5">demo_viewer.py</text>
+  <text class="d-text d-sub" x="975.0" y="121.5">left: frames dropped</text>
+  <text class="d-text d-sub" x="975.0" y="136.5">right: recovered</text>
+  <path class="d-line" d="M130,110 L227,110" marker-end="url(#ah-demo-setup)"/>
+  <text class="d-text d-sub" x="171" y="97">H.264 / TCP</text>
+  <path class="d-line" d="M793,110 L900,110" marker-end="url(#ah-demo-setup)"/>
+  <text class="d-text d-sub" x="850" y="97">H.264 / TCP</text>
+  <text class="d-text d-sub" x="530" y="212">Highlighted boxes are hardware units. The same relay can run all of them on the CPU instead.</text>
+</svg>
